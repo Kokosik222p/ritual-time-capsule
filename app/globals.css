@@ -1,0 +1,323 @@
+@import "tailwindcss";
+
+:root {
+  --ritual-black: #000000;
+  --ritual-fg: #ffffff;
+  --ritual-muted: rgba(255, 255, 255, 0.55);
+  --neon-purple: #a855f7;
+  --neon-purple-deep: #7c3aed;
+  --neon-cyan: #06b6d4;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ritual-fg);
+  background-color: var(--ritual-black);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Фон: background.png + легкий віньєт + діагональні «капсули» */
+.ritual-bg {
+  position: relative;
+  min-height: 100vh;
+  background-color: var(--ritual-black);
+  background-image:
+    radial-gradient(
+      ellipse 120% 80% at 50% 0%,
+      rgba(168, 85, 247, 0.07) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 90% 60% at 100% 100%,
+      rgba(6, 182, 212, 0.06) 0%,
+      transparent 50%
+    ),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.75) 100%),
+    url("/assets/background.png");
+  background-size: cover, cover, cover, cover;
+  background-position: center, center, center, center;
+  background-attachment: fixed;
+}
+
+@media (max-width: 767px) {
+  .ritual-bg {
+    background-attachment: scroll;
+  }
+}
+
+.ritual-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: repeating-linear-gradient(
+    125deg,
+    transparent 0px,
+    transparent 140px,
+    rgba(168, 85, 247, 0.04) 140px,
+    rgba(6, 182, 212, 0.05) 142px,
+    transparent 146px,
+    transparent 280px
+  );
+  mask-image: radial-gradient(
+    ellipse 85% 70% at 50% 40%,
+    black 20%,
+    transparent 75%
+  );
+}
+
+.ritual-bg > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Градієнтна обводка (1px–2px) */
+.neon-border {
+  position: relative;
+  border-radius: 1rem;
+  background: linear-gradient(
+    135deg,
+    var(--neon-purple) 0%,
+    var(--neon-purple-deep) 35%,
+    var(--neon-cyan) 100%
+  );
+  padding: 1.5px;
+  box-shadow: 0 0 28px -6px rgba(168, 85, 247, 0.45),
+    0 0 36px -12px rgba(6, 182, 212, 0.35);
+  transition: box-shadow 0.35s ease, transform 0.35s ease;
+}
+
+.neon-border:hover {
+  box-shadow: 0 0 40px -4px rgba(168, 85, 247, 0.6),
+    0 0 48px -8px rgba(6, 182, 212, 0.5);
+}
+
+.neon-border__inner {
+  border-radius: calc(1rem - 1.5px);
+  background: var(--ritual-black);
+}
+
+/* Кнопка-герой: неонова обводка (градієнт) + чорна серцевина */
+.neon-cta-wrap {
+  display: inline-flex;
+  border-radius: 9999px;
+  padding: 2px;
+  background: linear-gradient(
+    120deg,
+    var(--neon-purple) 0%,
+    var(--neon-purple-deep) 35%,
+    var(--neon-cyan) 100%
+  );
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.35),
+    0 0 52px -10px rgba(168, 85, 247, 0.6),
+    0 0 64px -14px rgba(6, 182, 212, 0.45);
+  transition: box-shadow 0.35s ease, transform 0.25s ease, filter 0.25s ease;
+}
+
+.neon-cta-wrap:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.4),
+    0 0 64px -8px rgba(168, 85, 247, 0.7),
+    0 0 72px -12px rgba(6, 182, 212, 0.5);
+  transform: translateY(-2px);
+}
+
+.neon-cta-wrap:active {
+  transform: translateY(0);
+}
+
+.neon-cta-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  border-radius: 9999px;
+  background: var(--ritual-black);
+  padding: 0.9rem 2rem;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+
+/* Другорядна кнопка (Connect Wallet): лише обводка */
+.neon-outline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #fff;
+  background: transparent;
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--ritual-black), var(--ritual-black)),
+    linear-gradient(
+      135deg,
+      var(--neon-purple),
+      var(--neon-cyan)
+    );
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: 0 0 20px -6px rgba(168, 85, 247, 0.35);
+  cursor: pointer;
+  transition: box-shadow 0.3s ease, filter 0.2s ease;
+}
+
+.neon-outline-btn:hover {
+  box-shadow: 0 0 28px -4px rgba(6, 182, 212, 0.45),
+    0 0 32px -8px rgba(168, 85, 247, 0.4);
+  filter: brightness(1.05);
+}
+
+@media (max-width: 767px) {
+  .neon-outline-btn {
+    min-height: 2.75rem;
+    padding: 0.625rem 1.35rem;
+    font-size: 0.9375rem;
+  }
+}
+
+/* Порожні картки секції */
+.neon-empty-card {
+  min-height: 18rem;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .neon-empty-card {
+    min-height: 20rem;
+  }
+}
+
+.hero-title {
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  text-shadow: 0 0 60px rgba(168, 85, 247, 0.25);
+}
+
+/* Home: dominant display title — smaller on phones, full scale md+ */
+.hero-title--home {
+  max-width: 22ch;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 0.96;
+  font-size: clamp(2.2rem, 7.2vw, 3rem);
+  text-shadow:
+    0 0 80px rgba(168, 85, 247, 0.38),
+    0 0 140px rgba(6, 182, 212, 0.14),
+    0 2px 24px rgba(0, 0, 0, 0.45);
+}
+
+@media (min-width: 768px) {
+  .hero-title--home {
+    font-size: clamp(2.85rem, 9.5vw, 5.75rem);
+  }
+}
+
+.hero-subtitle {
+  color: var(--ritual-muted);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* Home: longer hero copy, readable line length */
+.hero-subtitle--home {
+  margin-left: auto;
+  margin-right: auto;
+  font-size: clamp(1.1875rem, 2.35vw, 1.75rem);
+  line-height: 1.68;
+  font-weight: 450;
+  letter-spacing: 0.012em;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+@media (min-width: 768px) {
+  .hero-subtitle--home {
+    line-height: 1.72;
+  }
+}
+
+.neon-cta-wrap--home {
+  transform: none;
+}
+
+.neon-cta-inner--home {
+  padding: 1.1rem 1.85rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  min-height: 3.25rem;
+}
+
+@media (min-width: 768px) {
+  .neon-cta-inner--home {
+    min-height: unset;
+    padding: 1.15rem 2.65rem;
+    font-size: 1.125rem;
+  }
+}
+
+/* Hero → Recently Opened: breathing room without a hard divider */
+.home-page .home-hero {
+  padding-bottom: clamp(2.5rem, 6vw, 4.25rem);
+}
+
+.nav-link-active {
+  background: linear-gradient(
+    90deg,
+    var(--neon-purple),
+    var(--neon-cyan)
+  );
+  height: 2px;
+  border-radius: 9999px;
+}
+
+::selection {
+  background: rgba(168, 85, 247, 0.45);
+  color: #fff;
+}
+
+.ritual-card-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 640px) {
+  .ritual-card-grid {
+    gap: 1.25rem;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+}
+
+@keyframes capsule-seal-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 18px rgba(168, 85, 247, 0.45))
+      drop-shadow(0 0 28px rgba(6, 182, 212, 0.25));
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    filter: drop-shadow(0 0 32px rgba(34, 211, 238, 0.55))
+      drop-shadow(0 0 48px rgba(168, 85, 247, 0.35));
+    transform: scale(1.04) translateY(-4px);
+  }
+}
+
+.animate-capsule-seal {
+  animation: capsule-seal-glow 2.4s ease-in-out infinite;
+}

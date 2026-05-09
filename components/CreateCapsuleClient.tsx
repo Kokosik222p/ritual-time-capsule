@@ -1,0 +1,711 @@
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useAccount,
+  useConnect,
+  useConnectors,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
+import {
+  CATEGORY_VISUAL,
+  type CapsuleTag,
+} from "@/lib/capsule-categories";
+import { ritualTestnet } from "@/lib/chain";
+import {
+  buildCapsuleTokenUris,
+  getCapsuleContractEnv,
+  ritualTimeCapsuleAbi,
+} from "@/lib/ritual-time-capsule-contract";
+import {
+  isConnectorAlreadyConnectedError,
+  readConnectedAddress,
+} from "@/lib/wallet-connection";
+import { useChainTime } from "@/components/web3-provider";
+import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
+import {
+  appendMintedCapsule,
+  blobUrlToPersistedPhoto,
+} from "@/lib/minted-capsules-storage";
+import type { Address } from "viem";
+
+const PRESETS = [
+  { id: "7d", label: "7 Days (Quick)", seconds: 7 * 86400 },
+  { id: "30d", label: "30 Days (Short)", seconds: 30 * 86400 },
+  { id: "90d", label: "90 Days (Medium)", seconds: 90 * 86400 },
+  { id: "1y", label: "1 Year (Long)", seconds: 365 * 86400 },
+] as const;
+
+type PresetId = (typeof PRESETS)[number]["id"] | "custom";
+
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
+
+const TAGS: CapsuleTag[] = [
+  "Meme",
+  "Work",
+  "Personal",
+  "Important",
+  "Dream",
+  "Nature",
+];
+
+function toDatetimeLocalMin(sec: number) {
+  const d = new Date(sec * 1000);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+export function CreateCapsuleClient() {
+  const { nowSec, ready } = useChainTime();
+  const { address, chainId, isConnected } = useAccount();
+  const connectors = useConnectors();
+  const { connectAsync, isPending: isConnecting } = useConnect();
+  const { switchChainAsync, isPending: isSwitching } = useSwitchChain();
+  const {
+    writeContractAsync,
+    isPending: isWritePending,
+    error: writeError,
+    reset: resetWrite,
+  } = useWriteContract();
+
+  const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
+  const { data: receipt, isLoading: isConfirming } =
+    useWaitForTransactionReceipt({
+      hash: txHash,
+    });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [message, setMessage] = useState("");
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoDragOver, setPhotoDragOver] = useState(false);
+  const [tag, setTag] = useState<CapsuleTag>("Personal");
+  const [preset, setPreset] = useState<PresetId>("30d");
+  const [customLocal, setCustomLocal] = useState("");
+
+  const [pastUnlockOpen, setPastUnlockOpen] = useState(false);
+  const [mintError, setMintError] = useState<string | null>(null);
+  const pendingMintToRef = useRef<Address | null>(null);
+
+  const unlockAtUnix = useMemo(() => {
+    if (!ready || nowSec <= 0) return 0;
+    if (preset === "custom") {
+      if (!customLocal) return nowSec + 30 * 86400;
+      const u = Math.floor(new Date(customLocal).getTime() / 1000);
+      return Number.isFinite(u) ? u : nowSec + 30 * 86400;
+    }
+    const p = PRESETS.find((x) => x.id === preset);
+    return nowSec + (p?.seconds ?? 30 * 86400);
+  }, [customLocal, nowSec, preset, ready]);
+
+  const contractEnv = useMemo(() => getCapsuleContractEnv(), []);
+  const capsuleAddress =
+    contractEnv.status === "ok" ? contractEnv.address : null;
+
+  const walletConnector =
+    connectors.find((c) => c.id === "metaMaskSDK") ??
+    connectors.find((c) => c.id === "metaMask") ??
+    connectors[0];
+
+  const mintSucceeded = Boolean(txHash && receipt?.status === "success");
+  const mintReverted = Boolean(txHash && receipt?.status === "reverted");
+  const displayMintError =
+    mintReverted
+      ? "Transaction reverted on-chain."
+      : (mintError ?? writeError?.message ?? null);
+
+  const queryClient = useQueryClient();
+  const savedMintTxRef = useRef<string | null>(null);
+  const capsuleTag: CapsuleTag = tag === "Time" ? "Personal" : tag;
+
+  useEffect(() => {
+    if (
+      !mintSucceeded ||
+      receipt?.status !== "success" ||
+      !txHash ||
+      !address
+    ) {
+      return;
+    }
+    if (savedMintTxRef.current === txHash) return;
+    savedMintTxRef.current = txHash;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const userPhoto = await blobUrlToPersistedPhoto(photoUrl);
+        if (cancelled) return;
+        appendMintedCapsule({
+          id: txHash,
+          owner: address.toLowerCase(),
+          unlockAtUnix,
+          message: message.trim(),
+          tag: capsuleTag,
+          userPhoto,
+        });
+        await queryClient.invalidateQueries({ queryKey: CAPSULE_QUERIES.root });
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    address,
+    message,
+    mintSucceeded,
+    photoUrl,
+    queryClient,
+    receipt?.status,
+    capsuleTag,
+    txHash,
+    unlockAtUnix,
+  ]);
+
+  function handleFile(file: File | undefined) {
+    if (!file) return;
+    if (file.size > MAX_PHOTO_BYTES) return;
+    const type = file.type.toLowerCase();
+    if (type && !ACCEPTED_IMAGE_TYPES.has(type)) return;
+    const url = URL.createObjectURL(file);
+    setPhotoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+  }
+
+  const minCustom = ready && nowSec > 0 ? toDatetimeLocalMin(nowSec + 60) : "";
+
+  const tagVisual = CATEGORY_VISUAL[capsuleTag];
+
+  const isMinting = isWritePending || (!!txHash && isConfirming);
+
+  const runMint = useCallback(
+    async (to: Address) => {
+      setMintError(null);
+      resetWrite();
+
+      if (!capsuleAddress) {
+        setMintError(
+          "Capsule contract is not configured. Set NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS.",
+        );
+        return;
+      }
+      const trimmed = message.trim();
+      if (!trimmed) {
+        setMintError("Please write a message for your capsule.");
+        return;
+      }
+      if (!ready || unlockAtUnix <= 0) {
+        setMintError("Chain time is still loading. Try again in a moment.");
+        return;
+      }
+
+      const { sealed, opened } = buildCapsuleTokenUris({
+        message: trimmed,
+        tag: capsuleTag,
+      });
+
+      setTxHash(undefined);
+      try {
+        const hash = await writeContractAsync({
+          address: capsuleAddress,
+          abi: ritualTimeCapsuleAbi,
+          functionName: "mintCapsule",
+          args: [to, BigInt(unlockAtUnix), sealed, opened],
+          chainId: ritualTestnet.id,
+        });
+        setTxHash(hash);
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : "Mint failed. Please try again.";
+        setMintError(msg);
+        console.error(e);
+      }
+    },
+    [
+      capsuleAddress,
+      message,
+      ready,
+      resetWrite,
+      capsuleTag,
+      unlockAtUnix,
+      writeContractAsync,
+    ],
+  );
+
+  async function resolveMintRecipient(): Promise<Address | null> {
+    setMintError(null);
+    if (!walletConnector) {
+      setMintError(
+        "No wallet connector. Reload the page or install MetaMask.",
+      );
+      return null;
+    }
+    try {
+      if (isConnected && address) {
+        if (chainId !== ritualTestnet.id) {
+          await switchChainAsync({ chainId: ritualTestnet.id });
+        }
+        return address;
+      }
+
+      try {
+        const r = await connectAsync({
+          connector: walletConnector,
+        });
+        if (r.chainId !== ritualTestnet.id) {
+          await switchChainAsync({ chainId: ritualTestnet.id });
+        }
+        return r.accounts[0];
+      } catch (e) {
+        if (!isConnectorAlreadyConnectedError(e)) {
+          throw e;
+        }
+        await switchChainAsync({ chainId: ritualTestnet.id });
+        const to = readConnectedAddress();
+        if (!to) {
+          setMintError(
+            "Wallet reports connected but no address is available. Try refreshing the page.",
+          );
+          return null;
+        }
+        return to;
+      }
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Wallet request failed.";
+      setMintError(msg);
+      console.error(e);
+      return null;
+    }
+  }
+
+  async function handleSealClick() {
+    if (mintSucceeded || isMinting || isConnecting || isSwitching) return;
+
+    const to = await resolveMintRecipient();
+    if (!to) return;
+
+    if (unlockAtUnix <= nowSec) {
+      pendingMintToRef.current = to;
+      setPastUnlockOpen(true);
+      return;
+    }
+    await runMint(to);
+  }
+
+  async function handleConfirmPastMint() {
+    const to = pendingMintToRef.current ?? address;
+    if (!to) {
+      setMintError("Wallet address missing. Try again.");
+      setPastUnlockOpen(false);
+      return;
+    }
+    setPastUnlockOpen(false);
+    pendingMintToRef.current = null;
+    await runMint(to);
+  }
+
+  function handleCreateAnother() {
+    savedMintTxRef.current = null;
+    setTxHash(undefined);
+    setMintError(null);
+    resetWrite();
+    setPastUnlockOpen(false);
+    pendingMintToRef.current = null;
+    setMessage("");
+    setPhotoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPreset("30d");
+    setCustomLocal("");
+    setTag("Personal");
+  }
+
+  if (mintSucceeded) {
+    return (
+      <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6">
+        <section className="flex flex-col items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-b from-purple-950/40 via-black/50 to-cyan-950/25 px-5 py-12 text-center sm:px-6 sm:py-16">
+          <div className="relative mx-auto h-56 w-56 sm:h-64 sm:w-64">
+            <Image
+              src="/assets/capsule-closed.png"
+              alt="Sealed capsule"
+              fill
+              className="object-contain animate-capsule-seal"
+              sizes="256px"
+              priority
+            />
+          </div>
+          <p className="mt-8 max-w-md text-lg font-medium leading-relaxed text-white sm:text-xl">
+            Your capsule has been successfully sealed in time!
+          </p>
+          {txHash ? (
+            <a
+              href={`${ritualTestnet.blockExplorers.default.url}/tx/${txHash}`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 text-sm text-cyan-400/90 underline-offset-4 hover:underline"
+            >
+              View transaction
+            </a>
+          ) : null}
+          <div className="mt-8 flex w-full max-w-sm flex-col items-stretch gap-3 sm:mt-10 sm:max-w-none sm:flex-row sm:flex-wrap sm:justify-center sm:gap-3">
+            <Link
+              href="/my-capsules"
+              className="inline-flex min-h-12 items-center justify-center rounded-full bg-gradient-to-r from-purple-600/90 to-cyan-600/85 px-8 py-3.5 text-base font-medium text-white shadow-[0_0_28px_-6px_rgba(168,85,247,0.7)] transition hover:brightness-110 sm:min-h-0 sm:py-3 sm:text-sm"
+            >
+              View My Capsules
+            </Link>
+            <button
+              type="button"
+              onClick={handleCreateAnother}
+              className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/20 bg-white/5 px-8 py-3.5 text-base font-medium text-zinc-200 transition hover:border-cyan-400/40 hover:bg-white/10 sm:min-h-0 sm:py-3 sm:text-sm"
+            >
+              Create Another
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6">
+      {pastUnlockOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="past-unlock-title"
+        >
+          <div className="max-w-md rounded-2xl border border-amber-500/25 bg-zinc-950/95 p-6 shadow-[0_0_48px_-8px_rgba(251,191,36,0.35)]">
+            <h2
+              id="past-unlock-title"
+              className="text-lg font-semibold text-amber-100"
+            >
+              Unlock time in the past
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+              This time has already passed. Your capsule will be automatically
+              opened upon minting.
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  pendingMintToRef.current = null;
+                  setPastUnlockOpen(false);
+                }}
+                disabled={isMinting}
+                className="min-h-11 rounded-full border border-white/15 px-4 py-2.5 text-sm text-zinc-300 transition hover:bg-white/5 disabled:opacity-50 sm:min-h-0 sm:py-2"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPastMint}
+                disabled={isMinting}
+                className="min-h-11 rounded-full bg-gradient-to-r from-amber-600/90 to-orange-600/85 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-amber-900/30 transition hover:brightness-110 disabled:opacity-60 sm:min-h-0 sm:py-2"
+              >
+                {isMinting ? "Minting…" : "Confirm Mint (Opened)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <section className="rounded-2xl border border-white/10 bg-black/40 p-4 sm:p-6">
+        <h2 className="text-lg font-semibold text-white md:text-xl">
+          Live preview
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+          <span className="md:hidden">
+            Top: sealed capsule. Below: your open capsule — photo, message, and
+            category badge, matching the home grid.
+          </span>
+          <span className="hidden md:inline">
+            Left: sealed capsule. Right: your open capsule — photo, message, and
+            category badge (top right), as on the home grid.
+          </span>
+        </p>
+        <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-6">
+          <div className="relative mx-auto aspect-[4/5] w-full max-w-sm overflow-hidden rounded-xl border border-white/10 bg-black/60 md:mx-0 md:max-h-[22rem] md:max-w-none">
+            <Image
+              src="/assets/capsule-closed.png"
+              alt="Sealed capsule"
+              fill
+              className="object-contain p-5 sm:p-6"
+              sizes="(max-width: 768px) 100vw, 360px"
+            />
+          </div>
+          <div className="relative flex w-full flex-col gap-3 md:max-h-[22rem]">
+            <span
+              className={`pointer-events-none absolute right-2 top-2 z-10 rounded-full px-3 py-1.5 text-xs font-medium shadow-lg shadow-black/50 sm:py-1 ${tagVisual.badge}`}
+            >
+              {capsuleTag}
+            </span>
+            <div
+              className={`relative min-h-[14rem] flex-1 overflow-hidden rounded-xl ring-2 ring-offset-2 ring-offset-black sm:min-h-[12rem] md:min-h-0 ${photoUrl ? tagVisual.glow : "ring-zinc-600/45 shadow-none"}`}
+            >
+              {photoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={photoUrl}
+                  alt="Your photo"
+                  className="h-full min-h-[14rem] w-full object-cover sm:min-h-[12rem]"
+                />
+              ) : (
+                <div className="flex h-full min-h-[14rem] items-center justify-center bg-black/40 px-4 text-center text-sm text-zinc-500 sm:min-h-[12rem]">
+                  Upload a photo — it will appear here
+                </div>
+              )}
+            </div>
+            <p className="rounded-xl border border-white/10 bg-black/40 p-3.5 text-sm leading-relaxed text-zinc-300 sm:p-3 md:text-sm">
+              {message.trim() ||
+                "Your message will show here when the capsule opens."}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-8 md:grid-cols-2 md:gap-10">
+        <div className="space-y-5 md:space-y-6">
+          <h2 className="text-lg font-semibold text-white md:text-xl">
+            New capsule
+          </h2>
+
+          <label className="block space-y-2 text-sm text-zinc-300">
+            <span>Category</span>
+            <select
+              value={capsuleTag}
+              onChange={(e) => setTag(e.target.value as CapsuleTag)}
+              className="min-h-12 w-full rounded-xl border border-white/15 bg-black/50 px-4 py-3 text-base text-zinc-100 outline-none focus:border-cyan-500/40 md:min-h-0 md:py-2.5 md:text-sm"
+            >
+              {TAGS.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="space-y-2 text-sm text-zinc-300">
+            <span>Photo</span>
+            <div
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              className={`cursor-pointer rounded-xl border border-dashed p-6 text-center transition hover:border-white/50 sm:p-8 ${
+                photoDragOver
+                  ? "border-cyan-400"
+                  : "border-white/30"
+              }`}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setPhotoDragOver(true);
+              }}
+              onDragLeave={() => setPhotoDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setPhotoDragOver(false);
+                const f = e.dataTransfer.files[0];
+                if (f) handleFile(f);
+              }}
+            >
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-white/5 text-xl">
+                📸
+              </div>
+              <p className="font-medium text-white">
+                Drag &amp; drop your photo here
+              </p>
+              <p className="mt-1 text-sm text-zinc-500">or click to browse</p>
+              <p className="mt-3 text-xs text-zinc-600">
+                PNG, JPG, WEBP up to 10MB
+              </p>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleFile(f);
+                e.target.value = "";
+              }}
+            />
+          </div>
+
+          <label className="block space-y-2 text-sm text-zinc-300">
+            <span>Message</span>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={5}
+              maxLength={500}
+              className="w-full resize-none rounded-xl border border-purple-500/25 bg-black/45 px-4 py-3.5 text-base leading-relaxed text-zinc-100 outline-none focus:border-cyan-400/40 md:py-3 md:text-sm"
+              placeholder="Write your message…"
+            />
+            <span className="text-right text-xs text-zinc-500">
+              {message.length} / 500
+            </span>
+          </label>
+        </div>
+
+        <div className="space-y-5 md:space-y-6">
+          <h2 className="text-lg font-semibold text-white md:text-xl">
+            Unlock time
+          </h2>
+          <p className="text-sm leading-relaxed text-zinc-400">
+            Unlock timestamp uses the Ritual network clock (latest block time).
+            {!ready ? " Loading chain time…" : null}
+          </p>
+
+          <div className="flex flex-wrap gap-2 sm:gap-2">
+            {PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPreset(p.id)}
+                className={`min-h-11 rounded-full px-4 py-2.5 text-sm font-medium transition md:min-h-0 md:px-3 md:py-1.5 md:text-xs ${
+                  preset === p.id
+                    ? "bg-purple-500/30 text-white ring-1 ring-cyan-400/40"
+                    : "bg-white/5 text-zinc-400 hover:bg-white/10"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPreset("custom")}
+              className={`min-h-11 rounded-full px-4 py-2.5 text-sm font-medium transition md:min-h-0 md:px-3 md:py-1.5 md:text-xs ${
+                preset === "custom"
+                  ? "bg-purple-500/30 text-white ring-1 ring-cyan-400/40"
+                  : "border border-cyan-500/40 bg-transparent text-cyan-200 hover:bg-cyan-500/10"
+              }`}
+            >
+              Custom date
+            </button>
+          </div>
+
+          {preset === "custom" ? (
+            <label className="block space-y-2 text-sm text-zinc-300">
+              <span>Pick date &amp; time</span>
+              <input
+                type="datetime-local"
+                min={minCustom}
+                value={customLocal}
+                onChange={(e) => setCustomLocal(e.target.value)}
+                className="min-h-12 w-full rounded-xl border border-white/15 bg-black/50 px-4 py-3 text-base text-zinc-100 outline-none focus:border-cyan-500/40 md:min-h-0 md:py-2.5 md:text-sm"
+              />
+            </label>
+          ) : null}
+
+          <div className="rounded-xl border border-white/10 bg-black/35 p-4 text-sm text-zinc-400">
+            <span className="text-zinc-500">Unlock at (Unix): </span>
+            <span className="font-mono text-zinc-200">
+              {ready ? unlockAtUnix : "—"}
+            </span>
+          </div>
+
+          {contractEnv.status !== "ok" ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-500/40 bg-red-950/35 p-4 text-sm text-red-100/95"
+            >
+              <p className="font-semibold text-red-200">
+                {contractEnv.status === "unset"
+                  ? "Contract address is not configured"
+                  : "Invalid contract address in environment"}
+              </p>
+              <ol className="mt-3 list-decimal space-y-2 pl-5 text-red-100/85">
+                <li>
+                  Open{" "}
+                  <span className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
+                    .env.local
+                  </span>{" "}
+                  in the project root.
+                </li>
+                <li>
+                  Set exactly:{" "}
+                  <span className="font-mono text-xs break-all">
+                    NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS=0x…
+                  </span>{" "}
+                  (must be{" "}
+                  <span className="font-medium text-red-50">0x + 40 hex</span>{" "}
+                  characters, your deployed RitualTimeCapsule).
+                </li>
+                <li>
+                  Save the file and{" "}
+                  <span className="font-medium text-red-50">restart</span>{" "}
+                  <span className="font-mono text-xs">npm run dev</span> — Next.js
+                  reads <span className="font-mono text-xs">NEXT_PUBLIC_*</span>{" "}
+                  at startup.
+                </li>
+              </ol>
+              {contractEnv.status === "invalid" ? (
+                <p className="mt-3 text-xs text-red-200/90">
+                  {contractEnv.detail}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {displayMintError ? (
+            <p className="text-sm text-red-400/90">{displayMintError}</p>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={handleSealClick}
+            disabled={
+              !ready ||
+              !capsuleAddress ||
+              !message.trim() ||
+              isMinting ||
+              isConnecting ||
+              isSwitching
+            }
+            className="relative min-h-[3.25rem] w-full overflow-hidden rounded-full bg-gradient-to-r from-purple-600/90 to-cyan-600/85 py-3.5 text-base font-medium text-white shadow-[0_0_28px_-6px_rgba(168,85,247,0.7)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0 md:py-3 md:text-sm"
+          >
+            {isMinting || isConnecting || isSwitching ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                {isConnecting
+                  ? "Connecting…"
+                  : isSwitching
+                    ? "Switching network…"
+                    : isWritePending
+                      ? "Confirm in wallet…"
+                      : "Sealing on-chain…"}
+              </span>
+            ) : (
+              "Seal Capsule"
+            )}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
