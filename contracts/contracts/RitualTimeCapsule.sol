@@ -12,6 +12,9 @@ contract RitualTimeCapsule is ERC721, Ownable {
 
     uint256 private _nextTokenId = 1;
     mapping(uint256 => Capsule) private _capsules;
+    mapping(address => uint256) public dailyMints;
+    mapping(address => uint256) public lastMintDay;
+    uint256 public constant DAILY_LIMIT = 3;
 
     error InvalidUnlockDate();
     error CapsuleDoesNotExist();
@@ -25,11 +28,24 @@ contract RitualTimeCapsule is ERC721, Ownable {
         uint64 unlockTimestamp,
         string calldata tokenURI
     ) external returns (uint256 tokenId) {
+        uint256 today = block.timestamp / 1 days;
+
+        // Використовуємо msg.sender, а не 'to'
+        if (lastMintDay[msg.sender] != today) {
+            dailyMints[msg.sender] = 0;
+            lastMintDay[msg.sender] = today;
+        }
+
+        if (dailyMints[msg.sender] >= DAILY_LIMIT) {
+            revert("Daily mint limit reached (3 capsules per day)");
+        }
+
+        dailyMints[msg.sender] += 1;
+
         if (unlockTimestamp <= block.timestamp) revert InvalidUnlockDate();
 
         tokenId = _nextTokenId++;
         _mint(to, tokenId);
-
         _capsules[tokenId] = Capsule({
             unlockTimestamp: unlockTimestamp,
             tokenURI: tokenURI
