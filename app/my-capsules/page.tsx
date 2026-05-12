@@ -14,8 +14,7 @@ export default function MyCapsulesPage() {
         </h1>
         <p className="text-[0.9375rem] leading-relaxed text-zinc-500 md:text-base">
           Sealed capsules show only the closed form until unlock time passes
-          (chain time). After mint, your capsule appears here automatically —
-          same neon frames as Home and Gallery.
+          (chain time). After mint, your capsule appears here automatically.
         </p>
       </div>
 

@@ -69,7 +69,6 @@ export async function buildHomeRecentlyOpenedCapsules(
     return (
       u != null &&
       isPlausibleOpened(u, now) &&
-      c.userPhoto.trim().length > 0 &&
       c.message.trim().length > 0
     );
   });

@@ -56,11 +56,13 @@ function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | 
       json = rawJson;
     }
     const parsed = JSON.parse(json) as {
+      m?: unknown;
       message?: unknown;
       description?: unknown;
       d?: unknown;
       tag?: unknown;
       c?: unknown;
+      i?: unknown;
       image?: unknown;
       userPhoto?: unknown;
       photo?: unknown;
@@ -71,7 +73,9 @@ function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | 
         ? parsed.c
         : "Personal";
     const message =
-      typeof parsed.message === "string"
+      typeof parsed.m === "string"
+        ? parsed.m
+        : typeof parsed.message === "string"
         ? parsed.message
         : typeof parsed.description === "string"
           ? parsed.description
@@ -79,7 +83,9 @@ function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | 
             ? parsed.d
             : "";
     const userPhoto =
-      typeof parsed.image === "string"
+      typeof parsed.i === "string"
+        ? parsed.i
+        : typeof parsed.image === "string"
         ? parsed.image
         : typeof parsed.userPhoto === "string"
           ? parsed.userPhoto

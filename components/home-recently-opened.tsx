@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import Link from "next/link";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
@@ -18,11 +19,28 @@ export function HomeRecentlyOpened() {
     queryKey: CAPSULE_QUERIES.homeRecentlyOpened(nowSec),
     queryFn: () => buildHomeRecentlyOpenedCapsules(nowSec, HOME_OPEN_COUNT),
     enabled: hasChainNow,
-    staleTime: 15_000,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 25_000,
   });
 
   const items = data ?? [];
   const showSkeleton = !hasChainNow || (isPending && data === undefined);
+
+  useEffect(() => {
+    if (!hasChainNow || data === undefined) return;
+    console.debug("[RecentlyOpened] fetched", {
+      nowSec,
+      count: data.length,
+      items: data.map((item) => ({
+        id: item.id,
+        unlockAtUnix: item.unlockAtUnix,
+        hasPhoto: Boolean(item.userPhoto),
+        messageLength: item.message.length,
+      })),
+    });
+  }, [data, hasChainNow, nowSec]);
 
   return (
     <section

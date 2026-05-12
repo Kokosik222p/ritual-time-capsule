@@ -50,6 +50,9 @@ const PRESETS = [
 type PresetId = (typeof PRESETS)[number]["id"] | "custom";
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const ONCHAIN_PHOTO_MAX_DIMENSION = 800;
+const ONCHAIN_PHOTO_QUALITY = 0.75;
+const ONCHAIN_PHOTO_MAX_DATA_URI_BYTES = 32 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -70,6 +73,79 @@ function toDatetimeLocalMin(sec: number) {
   const d = new Date(sec * 1000);
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () =>
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function canvasToJpegDataUrl(
+  source: HTMLImageElement,
+  maxDimension: number,
+): Promise<string> {
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(source.naturalWidth, source.naturalHeight),
+  );
+  const width = Math.max(1, Math.round(source.naturalWidth * scale));
+  const height = Math.max(1, Math.round(source.naturalHeight * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.resolve("");
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(source, 0, 0, width, height);
+
+  return new Promise((resolve) => {
+    canvas.toBlob(
+      async (blob) => {
+        resolve(blob ? await blobToDataUrl(blob) : "");
+      },
+      "image/jpeg",
+      ONCHAIN_PHOTO_QUALITY,
+    );
+  });
+}
+
+async function optimizePhotoForOnchain(photoUrl: string | null): Promise<string> {
+  if (!photoUrl) return "";
+
+  try {
+    const sourceBlob = await fetch(photoUrl).then((r) => r.blob());
+    const objectUrl = URL.createObjectURL(sourceBlob);
+    const img = new window.Image();
+    img.decoding = "async";
+    img.src = objectUrl;
+    await img.decode();
+
+    let maxDimension = ONCHAIN_PHOTO_MAX_DIMENSION;
+    let optimized = "";
+    while (maxDimension >= 160) {
+      optimized = await canvasToJpegDataUrl(img, maxDimension);
+      if (
+        optimized &&
+        new Blob([optimized]).size <= ONCHAIN_PHOTO_MAX_DATA_URI_BYTES
+      ) {
+        break;
+      }
+      maxDimension = Math.floor(maxDimension * 0.82);
+    }
+
+    URL.revokeObjectURL(objectUrl);
+    return optimized;
+  } catch {
+    return "";
+  }
 }
 
 /** Рендерить children лише після mount (уникає hydration mismatch). */
@@ -112,6 +188,7 @@ export function CreateCapsuleClient() {
 
   const [pastUnlockOpen, setPastUnlockOpen] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
+  const mintInFlightRef = useRef(false);
   const pendingMintToRef = useRef<Address | null>(null);
   /** Unlock time, фактично відправлений у mint (після підгонки під block.timestamp контракту). */
   const pendingUnlockSentRef = useRef<number | null>(null);
@@ -152,6 +229,13 @@ export function CreateCapsuleClient() {
   const queryClient = useQueryClient();
   const savedMintTxRef = useRef<string | null>(null);
   const capsuleTag: CapsuleTag = tag === "Time" ? "Personal" : tag;
+
+  useEffect(() => {
+    if (receipt?.status === "success" || receipt?.status === "reverted") {
+      mintInFlightRef.current = false;
+      queueMicrotask(() => setTxSubmitting(false));
+    }
+  }, [receipt?.status]);
 
   useEffect(() => {
     if (
@@ -201,32 +285,38 @@ export function CreateCapsuleClient() {
           ],
         );
 
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: CAPSULE_QUERIES.user(address),
-            refetchType: "active",
-          }),
-          queryClient.refetchQueries({
-            queryKey: CAPSULE_QUERIES.user(address),
-            type: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: CAPSULE_QUERIES.gallery(),
-            refetchType: "active",
-          }),
-          queryClient.refetchQueries({
-            queryKey: CAPSULE_QUERIES.gallery(),
-            type: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-            refetchType: "active",
-          }),
-          queryClient.refetchQueries({
-            queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-            type: "active",
-          }),
-        ]);
+        const refreshCapsuleQueries = () =>
+          Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: CAPSULE_QUERIES.user(address),
+              refetchType: "all",
+            }),
+            queryClient.refetchQueries({
+              queryKey: CAPSULE_QUERIES.user(address),
+              type: "all",
+            }),
+            queryClient.invalidateQueries({
+              queryKey: CAPSULE_QUERIES.gallery(),
+              refetchType: "all",
+            }),
+            queryClient.refetchQueries({
+              queryKey: CAPSULE_QUERIES.gallery(),
+              type: "all",
+            }),
+            queryClient.invalidateQueries({
+              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+              refetchType: "all",
+            }),
+            queryClient.refetchQueries({
+              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+              type: "all",
+            }),
+          ]);
+
+        await refreshCapsuleQueries();
+        window.setTimeout(() => {
+          void refreshCapsuleQueries();
+        }, 3000);
       } catch (e) {
         console.error(e);
       }
@@ -317,8 +407,14 @@ export function CreateCapsuleClient() {
         return;
       }
 
+      if (mintInFlightRef.current) {
+        setMintError("Mint transaction is already pending. Wait for confirmation.");
+        return;
+      }
+      mintInFlightRef.current = true;
       setTxHash(undefined);
       setTxSubmitting(true);
+      let submittedHash: `0x${string}` | undefined;
       try {
         const latest = await publicClient.getBlock({ blockTag: "latest" });
         const rawBlockTs = BigInt(latest.timestamp);
@@ -367,8 +463,8 @@ export function CreateCapsuleClient() {
           return;
         }
 
-        const mintPhoto = await blobUrlToPersistedPhoto(photoUrl);
-        const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag, mintPhoto);
+        const onchainPhoto = await optimizePhotoForOnchain(photoUrl);
+        const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag, onchainPhoto);
 
         await publicClient.simulateContract({
           address: capsuleAddress,
@@ -387,12 +483,16 @@ export function CreateCapsuleClient() {
           account,
           chain: ritualTestnet,
         });
+        submittedHash = hash;
         setTxHash(hash);
       } catch (e) {
         pendingUnlockSentRef.current = null;
         setMintError(formatContractCallError(e));
       } finally {
-        setTxSubmitting(false);
+        if (!submittedHash) {
+          mintInFlightRef.current = false;
+          setTxSubmitting(false);
+        }
       }
     },
     [
@@ -485,6 +585,7 @@ export function CreateCapsuleClient() {
   function handleCreateAnother() {
     savedMintTxRef.current = null;
     pendingUnlockSentRef.current = null;
+    mintInFlightRef.current = false;
     setTxHash(undefined);
     setMintError(null);
     resetWrite();
@@ -728,11 +829,9 @@ export function CreateCapsuleClient() {
               <span className="font-semibold text-cyan-100">
                 Privacy note:
               </span>{" "}
-              photos are converted in your browser into
-              <span className="font-mono"> data:</span> metadata and sent in the
-              mint transaction so opened capsules can be visible to everyone. We
-              never upload or store your photos on our servers. On-chain
-              metadata is public and permanent.
+              photos are resized in your browser to an optimized JPEG and sent
+              as compact on-chain metadata, so opened capsules can be visible to
+              everyone. On-chain metadata is public and permanent.
             </div>
           </div>
 

@@ -96,35 +96,23 @@ export function getRitualCapsuleAddress(): Address | null {
   return env.status === "ok" ? env.address : null;
 }
 
-/**
- * Порожній URI на чейні = мінімальний газ (рядок не пишеться в storage як довгий payload).
- * Повні текст/фото лишаються в локальному сховищі додатку після успішного mint.
- */
+/** Fallback for gas-minimal mints without public metadata. */
 export const ONCHAIN_CAPSULE_TOKEN_URI = "";
 
-/**
- * Опційно: дуже короткий URI, якщо колись знадобиться непорожній tokenURI для гаманців.
- * За замовчуванням мінт використовує ONCHAIN_CAPSULE_TOKEN_URI.
- */
 export function buildMintMetadataUri(
   message: string,
   tag: CapsuleTag,
   image = "",
 ): string {
   const fullMessage = message.trim();
-  const payload = JSON.stringify({
-    name: "Ritual Time Capsule",
-    description: fullMessage,
-    message: fullMessage,
-    tag,
-    image,
-    d: fullMessage.slice(0, 64),
-    c: tag,
-  });
+  const payload = JSON.stringify(
+    image
+      ? { m: fullMessage, c: tag, i: image }
+      : { m: fullMessage, c: tag },
+  );
   return `data:application/json,${payload}`;
 }
 
-/** On-chain `tokenURI` для mintCapsule (короткий data: JSON). */
 export function buildCapsuleTokenUri(
   message: string,
   tag: CapsuleTag,

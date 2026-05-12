@@ -17,6 +17,10 @@ export function GalleryClient() {
   const { data: pool, isLoading } = useQuery({
     queryKey: CAPSULE_QUERIES.gallery(),
     queryFn: () => buildGalleryPool(),
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 25_000,
   });
 
   const openedItems = useMemo(() => {

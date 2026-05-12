@@ -13,6 +13,9 @@ export function formatContractCallError(error: unknown): string {
   if (/user rejected|denied transaction|rejected the request/i.test(raw)) {
     return "Підпис скасовано в гаманці. Спробуйте ще раз, якщо хочете продовжити мінт.";
   }
+  if (/already known|already imported|known transaction/i.test(raw)) {
+    return "Транзакція вже відправлена в мережу. Зачекайте підтвердження і не натискайте mint повторно.";
+  }
   if (raw.includes(INVALID_UNLOCK_SELECTOR)) {
     return "Час відкриття має бути пізнішим за час блоку мережі (InvalidUnlockDate). Оберіть дату хоча б на 1 годину пізніше за «зараз» або пресет 7 днів+ і підтвердіть у гаманці без довгої паузи.";
   }
