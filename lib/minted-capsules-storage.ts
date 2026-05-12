@@ -15,6 +15,15 @@ const STORAGE_KEY = "ritual-minted-capsules-v1";
 
 type Persisted = { v: 1; items: StoredMintedCapsule[] };
 
+function canonicalMintKey(item: Pick<StoredMintedCapsule, "owner" | "unlockAtUnix" | "message" | "tag">): string {
+  return [
+    item.owner.toLowerCase(),
+    Math.floor(item.unlockAtUnix),
+    item.message.trim(),
+    item.tag,
+  ].join("|");
+}
+
 function readRaw(): StoredMintedCapsule[] {
   if (typeof window === "undefined") return [];
   try {
@@ -35,13 +44,27 @@ function writeAll(items: StoredMintedCapsule[]) {
 }
 
 export function loadMintedCapsules(): StoredMintedCapsule[] {
-  return readRaw();
+  const all = readRaw();
+  const seen = new Set<string>();
+  const deduped = all.filter((item) => {
+    const key = canonicalMintKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (deduped.length !== all.length) {
+    writeAll(deduped);
+  }
+  return deduped;
 }
 
 export function appendMintedCapsule(item: StoredMintedCapsule): void {
   const all = readRaw();
-  if (all.some((x) => x.id === item.id)) return;
-  writeAll([item, ...all]);
+  const itemKey = canonicalMintKey(item);
+  const rest = all.filter(
+    (x) => x.id !== item.id && canonicalMintKey(x) !== itemKey,
+  );
+  writeAll([item, ...rest]);
 }
 
 export function storedToCapsuleItem(s: StoredMintedCapsule): CapsuleItem {

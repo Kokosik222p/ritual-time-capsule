@@ -69,6 +69,29 @@ const TAGS: CapsuleTag[] = [
   "Nature",
 ];
 
+function capsuleCacheKey(item: CapsuleItem): string {
+  return [
+    item.owner?.toLowerCase() ?? "",
+    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
+    item.message.trim(),
+    item.tag,
+  ].join("|");
+}
+
+function prependUniqueCapsule(
+  current: CapsuleItem[] = [],
+  item: CapsuleItem,
+): CapsuleItem[] {
+  const key = capsuleCacheKey(item);
+  return [
+    item,
+    ...current.filter(
+      (currentItem) =>
+        currentItem.id !== item.id && capsuleCacheKey(currentItem) !== key,
+    ),
+  ];
+}
+
 function toDatetimeLocalMin(sec: number) {
   const d = new Date(sec * 1000);
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -280,26 +303,18 @@ export function CreateCapsuleClient() {
 
         queryClient.setQueryData<CapsuleItem[]>(
           CAPSULE_QUERIES.user(address),
-          (current = []) => [
-            optimisticCapsule,
-            ...current.filter((item) => item.id !== optimisticCapsule.id),
-          ],
+          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
         );
 
         if (unlockAt <= chainNowSec) {
           queryClient.setQueryData<CapsuleItem[]>(
             CAPSULE_QUERIES.gallery(),
-            (current = []) => [
-              optimisticCapsule,
-              ...current.filter((item) => item.id !== optimisticCapsule.id),
-            ],
+            (current = []) => prependUniqueCapsule(current, optimisticCapsule),
           );
           queryClient.setQueryData<CapsuleItem[]>(
             CAPSULE_QUERIES.homeRecentlyOpened(chainNowSec),
-            (current = []) => [
-              optimisticCapsule,
-              ...current.filter((item) => item.id !== optimisticCapsule.id),
-            ].slice(0, 3),
+            (current = []) =>
+              prependUniqueCapsule(current, optimisticCapsule).slice(0, 3),
           );
         }
 

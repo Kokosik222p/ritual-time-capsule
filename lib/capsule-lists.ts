@@ -5,9 +5,51 @@ import {
 import { loadPublicOnchainCapsules } from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
 
-function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[]): CapsuleItem[] {
-  const seen = new Set(preferred.map((x) => x.id));
-  return [...preferred, ...rest.filter((x) => !seen.has(x.id))];
+function dedupeKey(item: CapsuleItem): string {
+  return [
+    item.id,
+    item.owner?.toLowerCase() ?? "",
+    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
+    item.message.trim(),
+    item.tag,
+  ].join("|");
+}
+
+function canonicalCapsuleKey(item: CapsuleItem): string {
+  return [
+    item.owner?.toLowerCase() ?? "",
+    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
+    item.message.trim(),
+    item.tag,
+  ].join("|");
+}
+
+function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[] = []): CapsuleItem[] {
+  const result: CapsuleItem[] = [];
+  const seenIds = new Set<string>();
+  const seenStrict = new Set<string>();
+  const seenCanonical = new Set<string>();
+
+  for (const item of [...preferred, ...rest]) {
+    const strictKey = dedupeKey(item);
+    const canonicalKey = canonicalCapsuleKey(item);
+    if (
+      seenIds.has(item.id) ||
+      seenStrict.has(strictKey) ||
+      (item.owner && item.unlockAtUnix != null && seenCanonical.has(canonicalKey))
+    ) {
+      continue;
+    }
+
+    seenIds.add(item.id);
+    seenStrict.add(strictKey);
+    if (item.owner && item.unlockAtUnix != null) {
+      seenCanonical.add(canonicalKey);
+    }
+    result.push(item);
+  }
+
+  return result;
 }
 
 function hasPublicContent(item: CapsuleItem): boolean {
@@ -40,7 +82,7 @@ export async function buildMyCapsulesList(
 /** Full gallery pool: public on-chain capsules only. */
 export async function buildGalleryPool(): Promise<CapsuleItem[]> {
   const capsules = await loadPublicOnchainCapsules();
-  const withPublicContent = capsules.filter(hasPublicContent);
+  const withPublicContent = dedupeById(capsules.filter(hasPublicContent));
   console.debug("[GalleryPool] public capsules", {
     count: capsules.length,
     withPublicContent: withPublicContent.length,
@@ -87,7 +129,7 @@ export async function buildHomeRecentlyOpenedCapsules(
     return u != null && isPlausibleOpened(u, now) && hasPublicContent(c);
   });
 
-  const combined = onchainOpened.sort(
+  const combined = dedupeById(onchainOpened).sort(
     (a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0),
   );
 
