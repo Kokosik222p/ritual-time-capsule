@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
 import { useChainTime } from "@/components/web3-provider";
@@ -14,7 +14,11 @@ import {
 export function GalleryClient() {
   const { nowSec, ready } = useChainTime();
 
-  const { data: pool, isLoading } = useQuery({
+  const {
+    data: pool,
+    error,
+    isPending,
+  } = useQuery({
     queryKey: CAPSULE_QUERIES.gallery(),
     queryFn: () => buildGalleryPool(),
     staleTime: 0,
@@ -28,7 +32,24 @@ export function GalleryClient() {
     return filterOpenedAtChainTime(pool, nowSec);
   }, [pool, nowSec, ready]);
 
-  if (isLoading || !pool) {
+  useEffect(() => {
+    if (!ready || nowSec <= 0 || pool === undefined) return;
+    console.debug("[GalleryClient] loaded", {
+      nowSec,
+      total: pool.length,
+      opened: openedItems.length,
+      error,
+      items: pool.map((item) => ({
+        id: item.id,
+        unlockAtUnix: item.unlockAtUnix,
+        isOpened: item.unlockAtUnix != null && item.unlockAtUnix <= nowSec,
+        hasPhoto: Boolean(item.userPhoto),
+        messageLength: item.message.length,
+      })),
+    });
+  }, [error, nowSec, openedItems.length, pool, ready]);
+
+  if (isPending && pool === undefined) {
     return (
       <div className="ritual-card-grid lg:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (

@@ -10,6 +10,16 @@ function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[]): CapsuleItem[
   return [...preferred, ...rest.filter((x) => !seen.has(x.id))];
 }
 
+function hasPublicContent(item: CapsuleItem): boolean {
+  return item.message.trim().length > 0 || item.userPhoto.trim().length > 0;
+}
+
+function isOpenedAtChainTime(item: CapsuleItem, chainNowSec: number): boolean {
+  const now = Math.floor(chainNowSec);
+  const unlockAt = item.unlockAtUnix;
+  return unlockAt != null && unlockAt <= now;
+}
+
 /** My Capsules: only capsules owned by the connected wallet. */
 export async function buildMyCapsulesList(
   walletAddress: string | undefined,
@@ -29,7 +39,19 @@ export async function buildMyCapsulesList(
 
 /** Full gallery pool: public on-chain capsules only. */
 export async function buildGalleryPool(): Promise<CapsuleItem[]> {
-  return loadPublicOnchainCapsules();
+  const capsules = await loadPublicOnchainCapsules();
+  const withPublicContent = capsules.filter(hasPublicContent);
+  console.debug("[GalleryPool] public capsules", {
+    count: capsules.length,
+    withPublicContent: withPublicContent.length,
+    items: withPublicContent.map((item) => ({
+      id: item.id,
+      unlockAtUnix: item.unlockAtUnix,
+      hasPhoto: Boolean(item.userPhoto),
+      messageLength: item.message.length,
+    })),
+  });
+  return withPublicContent;
 }
 
 /** Only capsules that are open at `chainNowSec`. */
@@ -37,12 +59,7 @@ export function filterOpenedAtChainTime(
   items: CapsuleItem[],
   chainNowSec: number,
 ): CapsuleItem[] {
-  const now = Math.floor(chainNowSec);
-  return items.filter((item) => {
-    const u = item.unlockAtUnix;
-    if (u == null) return false;
-    return u <= now;
-  });
+  return items.filter((item) => isOpenedAtChainTime(item, chainNowSec));
 }
 
 const MAX_HOME_AGE_SEC = 25 * 365 * 86400;
@@ -64,18 +81,28 @@ export async function buildHomeRecentlyOpenedCapsules(
   const now = Math.floor(chainNowSec);
   if (now <= 0) return [];
 
-  const onchainOpened = (await loadPublicOnchainCapsules()).filter((c) => {
+  const loaded = await loadPublicOnchainCapsules();
+  const onchainOpened = loaded.filter((c) => {
     const u = c.unlockAtUnix;
-    return (
-      u != null &&
-      isPlausibleOpened(u, now) &&
-      c.message.trim().length > 0
-    );
+    return u != null && isPlausibleOpened(u, now) && hasPublicContent(c);
   });
 
   const combined = onchainOpened.sort(
     (a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0),
   );
+
+  console.debug("[HomeRecentlyOpenedBuilder] opened capsules", {
+    now,
+    loaded: loaded.length,
+    withPublicContent: loaded.filter(hasPublicContent).length,
+    count: combined.length,
+    items: combined.map((item) => ({
+      id: item.id,
+      unlockAtUnix: item.unlockAtUnix,
+      hasPhoto: Boolean(item.userPhoto),
+      messageLength: item.message.length,
+    })),
+  });
 
   return combined.slice(0, limit);
 }

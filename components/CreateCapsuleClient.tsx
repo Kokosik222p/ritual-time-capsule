@@ -303,8 +303,15 @@ export function CreateCapsuleClient() {
           );
         }
 
-        const refreshCapsuleQueries = () =>
-          Promise.all([
+        const refreshCapsuleQueries = async () => {
+          console.debug("[CreateCapsule] refreshing capsule queries", {
+            txHash,
+            unlockAt,
+            chainNowSec,
+            isOpenedNow: unlockAt <= chainNowSec,
+          });
+
+          await Promise.all([
             queryClient.removeQueries({
               queryKey: CAPSULE_QUERIES.gallery(),
               type: "inactive",
@@ -314,35 +321,34 @@ export function CreateCapsuleClient() {
               type: "inactive",
             }),
             queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.user(address),
+              queryKey: CAPSULE_QUERIES.root,
               refetchType: "all",
             }),
+          ]);
+
+          await Promise.all([
             queryClient.refetchQueries({
               queryKey: CAPSULE_QUERIES.user(address),
               type: "all",
             }),
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.gallery(),
-              refetchType: "all",
-            }),
             queryClient.refetchQueries({
               queryKey: CAPSULE_QUERIES.gallery(),
               type: "all",
-            }),
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-              refetchType: "all",
             }),
             queryClient.refetchQueries({
               queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
               type: "all",
             }),
           ]);
+        };
 
         await refreshCapsuleQueries();
         window.setTimeout(() => {
           void refreshCapsuleQueries();
         }, 3000);
+        window.setTimeout(() => {
+          void refreshCapsuleQueries();
+        }, 15000);
       } catch (e) {
         console.error(e);
       }
