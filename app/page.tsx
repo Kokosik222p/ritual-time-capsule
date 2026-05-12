@@ -53,11 +53,11 @@ export default function HomePage() {
 
         <p className="hero-subtitle hero-subtitle--home mt-6 max-w-[34rem] px-1 md:mt-9 md:max-w-[42rem] lg:max-w-[46rem]">
           <span className="block">
-            Seal a time-locked proof of your memories on Ritual.
+            Seal your photos, memories, and messages on the blockchain.
           </span>
           <span className="mt-3 block md:mt-3.5">
-            Your full photos stay in your browser; the on-chain mint stores the
-            public metadata needed to reveal the capsule at the time you choose.
+            They stay hidden until the exact time you choose — then they reveal
+            themselves forever.
           </span>
         </p>
 

@@ -15,7 +15,7 @@ export function HomeRecentlyOpened() {
   const hasChainNow = ready && nowSec > 0;
 
   const { data, isPending } = useQuery({
-    queryKey: [...CAPSULE_QUERIES.root, "home-recently-opened", nowSec],
+    queryKey: CAPSULE_QUERIES.homeRecentlyOpened(nowSec),
     queryFn: () => buildHomeRecentlyOpenedCapsules(nowSec, HOME_OPEN_COUNT),
     enabled: hasChainNow,
     staleTime: 15_000,

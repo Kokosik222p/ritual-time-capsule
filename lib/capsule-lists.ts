@@ -1,10 +1,4 @@
 import {
-  galleryCapsules,
-  homeRecentlyOpenedSeeds,
-  mapOpenSeedsToCapsules,
-  myCapsules,
-} from "@/lib/demo-capsules";
-import {
   loadMintedCapsules,
   storedToCapsuleItem,
 } from "@/lib/minted-capsules-storage";
@@ -16,22 +10,26 @@ function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[]): CapsuleItem[
   return [...preferred, ...rest.filter((x) => !seen.has(x.id))];
 }
 
-/** My Capsules: user mints (this wallet) first, then demo items. */
-export function buildMyCapsulesList(walletAddress: string | undefined): CapsuleItem[] {
+/** My Capsules: only capsules owned by the connected wallet. */
+export async function buildMyCapsulesList(
+  walletAddress: string | undefined,
+): Promise<CapsuleItem[]> {
   const owner = walletAddress?.toLowerCase();
-  const minted = owner
-    ? loadMintedCapsules()
-        .filter((m) => m.owner === owner)
-        .map(storedToCapsuleItem)
-    : [];
-  return dedupeById(minted, myCapsules);
+  if (!owner) return [];
+
+  const onchain = (await loadPublicOnchainCapsules()).filter(
+    (item) => item.owner?.toLowerCase() === owner,
+  );
+  const minted = loadMintedCapsules()
+    .filter((m) => m.owner === owner)
+    .map(storedToCapsuleItem);
+
+  return dedupeById(onchain, minted);
 }
 
-/** Full gallery pool: public on-chain capsules + local mints + demo gallery list. */
+/** Full gallery pool: public on-chain capsules only. */
 export async function buildGalleryPool(): Promise<CapsuleItem[]> {
-  const onchain = await loadPublicOnchainCapsules();
-  const minted = loadMintedCapsules().map(storedToCapsuleItem);
-  return dedupeById(onchain, dedupeById(minted, galleryCapsules));
+  return loadPublicOnchainCapsules();
 }
 
 /** Only capsules that are open at `chainNowSec`. */
@@ -56,8 +54,7 @@ function isPlausibleOpened(u: number, now: number): boolean {
 }
 
 /**
- * Home hero row: public on-chain opened capsules + local mints + demo seeds,
- * all keyed to `chainNowSec` so “Opened X ago” matches the chain clock.
+ * Home hero row: real public on-chain opened capsules only.
  * Newest unlock time first; capped at `limit` (default 3).
  */
 export async function buildHomeRecentlyOpenedCapsules(
@@ -69,35 +66,15 @@ export async function buildHomeRecentlyOpenedCapsules(
 
   const onchainOpened = (await loadPublicOnchainCapsules()).filter((c) => {
     const u = c.unlockAtUnix;
-    return u != null && isPlausibleOpened(u, now);
+    return (
+      u != null &&
+      isPlausibleOpened(u, now) &&
+      c.userPhoto.trim().length > 0 &&
+      c.message.trim().length > 0
+    );
   });
 
-  const mintedOpened = loadMintedCapsules()
-    .map(storedToCapsuleItem)
-    .filter((c) => {
-      const u = c.unlockAtUnix;
-      return u != null && isPlausibleOpened(u, now);
-    });
-
-  const demoOpened = mapOpenSeedsToCapsules(now, homeRecentlyOpenedSeeds).filter(
-    (c) => {
-      const u = c.unlockAtUnix;
-      return u != null && isPlausibleOpened(u, now);
-    },
-  );
-
-  const byId = new Map<string, CapsuleItem>();
-  for (const d of demoOpened) {
-    byId.set(d.id, d);
-  }
-  for (const m of mintedOpened) {
-    byId.set(m.id, m);
-  }
-  for (const c of onchainOpened) {
-    byId.set(c.id, c);
-  }
-
-  const combined = [...byId.values()].sort(
+  const combined = onchainOpened.sort(
     (a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0),
   );
 

@@ -37,6 +37,7 @@ import {
   appendMintedCapsule,
   blobUrlToPersistedPhoto,
 } from "@/lib/minted-capsules-storage";
+import type { CapsuleItem } from "@/lib/capsule-types";
 import type { Address } from "viem";
 
 const PRESETS = [
@@ -169,18 +170,63 @@ export function CreateCapsuleClient() {
       try {
         const userPhoto = await blobUrlToPersistedPhoto(photoUrl);
         if (cancelled) return;
-        appendMintedCapsule({
+        const owner = address.toLowerCase();
+        const unlockAt =
+          pendingUnlockSentRef.current != null
+            ? pendingUnlockSentRef.current
+            : unlockAtUnix;
+        const optimisticCapsule: CapsuleItem = {
           id: txHash,
-          owner: address.toLowerCase(),
-          unlockAtUnix:
-            pendingUnlockSentRef.current != null
-              ? pendingUnlockSentRef.current
-              : unlockAtUnix,
+          owner,
+          unlockAtUnix: unlockAt,
           message: message.trim(),
           tag: capsuleTag,
           userPhoto,
+        };
+
+        appendMintedCapsule({
+          id: optimisticCapsule.id,
+          owner,
+          unlockAtUnix: unlockAt,
+          message: optimisticCapsule.message,
+          tag: optimisticCapsule.tag,
+          userPhoto: optimisticCapsule.userPhoto,
         });
-        await queryClient.invalidateQueries({ queryKey: CAPSULE_QUERIES.root });
+
+        queryClient.setQueryData<CapsuleItem[]>(
+          CAPSULE_QUERIES.user(address),
+          (current = []) => [
+            optimisticCapsule,
+            ...current.filter((item) => item.id !== optimisticCapsule.id),
+          ],
+        );
+
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: CAPSULE_QUERIES.user(address),
+            refetchType: "active",
+          }),
+          queryClient.refetchQueries({
+            queryKey: CAPSULE_QUERIES.user(address),
+            type: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: CAPSULE_QUERIES.gallery(),
+            refetchType: "active",
+          }),
+          queryClient.refetchQueries({
+            queryKey: CAPSULE_QUERIES.gallery(),
+            type: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+            refetchType: "active",
+          }),
+          queryClient.refetchQueries({
+            queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+            type: "active",
+          }),
+        ]);
       } catch (e) {
         console.error(e);
       }
@@ -682,10 +728,11 @@ export function CreateCapsuleClient() {
               <span className="font-semibold text-cyan-100">
                 Privacy note:
               </span>{" "}
-              photos are converted in your browser into a local
-              <span className="font-mono"> data:</span> URL for preview and
-              your local capsule list. We never upload or store your photos on
-              our servers. On-chain metadata is public and permanent.
+              photos are converted in your browser into
+              <span className="font-mono"> data:</span> metadata and sent in the
+              mint transaction so opened capsules can be visible to everyone. We
+              never upload or store your photos on our servers. On-chain
+              metadata is public and permanent.
             </div>
           </div>
 

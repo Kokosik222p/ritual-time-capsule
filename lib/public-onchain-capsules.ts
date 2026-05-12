@@ -121,6 +121,7 @@ export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
 
         return {
           id: `onchain-${tokenId.toString()}`,
+          owner: log.args.owner?.toLowerCase(),
           unlockAtUnix: normalizeUnlock(log.args.unlockTimestamp),
           ...metadata,
         };

@@ -47,6 +47,7 @@ export function appendMintedCapsule(item: StoredMintedCapsule): void {
 export function storedToCapsuleItem(s: StoredMintedCapsule): CapsuleItem {
   return {
     id: s.id,
+    owner: s.owner,
     userPhoto: s.userPhoto,
     message: s.message,
     tag: s.tag,

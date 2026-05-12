@@ -2,9 +2,8 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract RitualTimeCapsule is ERC721, Ownable {
+contract RitualTimeCapsule is ERC721 {
     struct Capsule {
         uint64 unlockTimestamp;
         string tokenURI;        // один URI (sealed або opened)
@@ -18,10 +17,11 @@ contract RitualTimeCapsule is ERC721, Ownable {
 
     error InvalidUnlockDate();
     error CapsuleDoesNotExist();
+    error DailyMintLimitReached();
 
     event CapsuleMinted(uint256 indexed tokenId, address indexed owner, uint64 unlockTimestamp);
 
-    constructor() ERC721("Ritual Time Capsule", "RTC") Ownable(msg.sender) {}
+    constructor() ERC721("Ritual Time Capsule", "RTC") {}
 
     function mintCapsule(
         address to,
@@ -33,21 +33,26 @@ contract RitualTimeCapsule is ERC721, Ownable {
             normalizedTimestamp = normalizedTimestamp / 1000;
         }
         uint256 today = normalizedTimestamp / 1 days;
+        uint256 mintedToday = lastMintDay[msg.sender] == today ? dailyMints[msg.sender] : 0;
+
+        if (mintedToday >= DAILY_LIMIT) {
+            revert DailyMintLimitReached();
+        }
+
+        unchecked {
+            dailyMints[msg.sender] = mintedToday + 1;
+        }
 
         if (lastMintDay[msg.sender] != today) {
-            dailyMints[msg.sender] = 0;
             lastMintDay[msg.sender] = today;
         }
 
-        if (dailyMints[msg.sender] >= DAILY_LIMIT) {
-            revert("Daily mint limit reached (3 capsules per day)");
-        }
-
-        dailyMints[msg.sender] += 1;
-
         if (unlockTimestamp <= block.timestamp) revert InvalidUnlockDate();
 
-        tokenId = _nextTokenId++;
+        tokenId = _nextTokenId;
+        unchecked {
+            _nextTokenId = tokenId + 1;
+        }
         _mint(to, tokenId);
         _capsules[tokenId] = Capsule({
             unlockTimestamp: unlockTimestamp,

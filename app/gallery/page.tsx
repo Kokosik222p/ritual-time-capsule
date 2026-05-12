@@ -14,8 +14,8 @@ export default function GalleryPage() {
         </h1>
         <p className="max-w-2xl text-zinc-400">
           Only opened capsules are shown, using Ritual chain time to decide what
-          has unlocked. Photos from your own mints are loaded from this browser,
-          not from our servers.
+          has unlocked. Public capsule metadata is read from the on-chain
+          contract, not from a private server.
         </p>
       </div>
 
