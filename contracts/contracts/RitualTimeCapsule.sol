@@ -28,9 +28,12 @@ contract RitualTimeCapsule is ERC721, Ownable {
         uint64 unlockTimestamp,
         string calldata tokenURI
     ) external returns (uint256 tokenId) {
-        uint256 today = block.timestamp / 1 days;
+        uint256 normalizedTimestamp = block.timestamp;
+        if (normalizedTimestamp > 1_000_000_000_000) {
+            normalizedTimestamp = normalizedTimestamp / 1000;
+        }
+        uint256 today = normalizedTimestamp / 1 days;
 
-        // Використовуємо msg.sender, а не 'to'
         if (lastMintDay[msg.sender] != today) {
             dailyMints[msg.sender] = 0;
             lastMintDay[msg.sender] = today;
