@@ -321,7 +321,8 @@ export function CreateCapsuleClient() {
           return;
         }
 
-        const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag);
+        const mintPhoto = await blobUrlToPersistedPhoto(photoUrl);
+        const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag, mintPhoto);
 
         await publicClient.simulateContract({
           address: capsuleAddress,
@@ -353,6 +354,7 @@ export function CreateCapsuleClient() {
       capsuleTag,
       contractEnv,
       message,
+      photoUrl,
       publicClient,
       ready,
       resetWrite,

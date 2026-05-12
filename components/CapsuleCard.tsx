@@ -86,12 +86,13 @@ export function CapsuleCard({
   const unlockRaw = item.unlockAtUnix;
   const unlockForSealed = unlockRaw ?? 9999999999;
   /** Sealed artwork only when not forcing “opened” UI (e.g. Home always forces open). */
-  const showSealedVisual =
+  const isSealed =
     !forceOpened &&
     ready &&
     chainNow > 0 &&
     unlockRaw != null &&
     unlockForSealed > chainNow;
+  const isOpenedVisual = forceOpened || !isSealed;
 
   const timeLabel = (() => {
     if (!ready || chainNow <= 0) return "Syncing chain time…";
@@ -103,7 +104,7 @@ export function CapsuleCard({
       const openedAt = Math.min(Math.floor(u), chainNow);
       return formatOpenedAgo(openedAt, chainNow);
     }
-    if (showSealedVisual) {
+    if (isSealed) {
       return formatSealedUntil(unlockForSealed);
     }
     const u = unlockRaw ?? 0;
@@ -142,7 +143,7 @@ export function CapsuleCard({
       className={`group relative flex h-full ${CARD_MIN_H} flex-col overflow-hidden ${cardBase} transition-colors ${spotlight ? "hover:border-white/[0.14]" : "hover:border-white/18"} ${className}`}
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        {showSealedVisual ? (
+        {isSealed ? (
           <>
             <PhotoBlock spotlight={spotlight}>
               <CategoryBadge tag={item.tag} spotlight={spotlight} />
@@ -156,7 +157,7 @@ export function CapsuleCard({
             </PhotoBlock>
             <div className={`${MESSAGE_MIN} mt-3 flex-1`} aria-hidden />
           </>
-        ) : (
+        ) : isOpenedVisual ? (
           <>
             {photoSrc ? (
               <PhotoBlock key={photoSrc} spotlight={spotlight}>
@@ -168,8 +169,10 @@ export function CapsuleCard({
                   src={photoSrc}
                   alt="Capsule content"
                   className="capsule-opened-photo"
-                  loading="lazy"
+                  data-unoptimized="true"
+                  loading="eager"
                   decoding="async"
+                  sizes="(max-width: 480px) calc(100vw - 48px), (max-width: 768px) calc(100vw - 64px), 280px"
                 />
               </PhotoBlock>
             ) : (
@@ -189,18 +192,18 @@ export function CapsuleCard({
             </p>
             <div className="min-h-[1px] flex-1" aria-hidden />
           </>
-        )}
+        ) : null}
       </div>
 
       <div
-        className={`mt-auto flex shrink-0 items-end gap-2 border-t pt-3 sm:pt-4 ${spotlight ? "border-white/[0.08]" : "border-white/10"} ${(forceOpened || !showSealedVisual) && hideShare ? "justify-start" : "justify-between"}`}
+        className={`mt-auto flex shrink-0 items-end gap-2 border-t pt-3 sm:pt-4 ${spotlight ? "border-white/[0.08]" : "border-white/10"} ${isOpenedVisual && hideShare ? "justify-start" : "justify-between"}`}
       >
         <p
           className={`min-w-0 flex-1 leading-snug ${spotlight ? "text-[11px] font-medium tracking-wide text-zinc-400 tabular-nums sm:text-xs" : "text-xs text-zinc-400"}`}
         >
           {timeLabel}
         </p>
-        {!showSealedVisual && !hideShare ? (
+        {isOpenedVisual && !hideShare ? (
           <button
             type="button"
             onClick={async () => {

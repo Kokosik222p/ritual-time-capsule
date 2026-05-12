@@ -8,6 +8,7 @@ import {
   loadMintedCapsules,
   storedToCapsuleItem,
 } from "@/lib/minted-capsules-storage";
+import { loadPublicOnchainCapsules } from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
 
 function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[]): CapsuleItem[] {
@@ -26,10 +27,11 @@ export function buildMyCapsulesList(walletAddress: string | undefined): CapsuleI
   return dedupeById(minted, myCapsules);
 }
 
-/** Full gallery pool: minted (all owners) + demo gallery list. */
-export function buildGalleryPool(): CapsuleItem[] {
+/** Full gallery pool: public on-chain capsules + local mints + demo gallery list. */
+export async function buildGalleryPool(): Promise<CapsuleItem[]> {
+  const onchain = await loadPublicOnchainCapsules();
   const minted = loadMintedCapsules().map(storedToCapsuleItem);
-  return dedupeById(minted, galleryCapsules);
+  return dedupeById(onchain, dedupeById(minted, galleryCapsules));
 }
 
 /** Only capsules that are open at `chainNowSec`. */
@@ -54,16 +56,21 @@ function isPlausibleOpened(u: number, now: number): boolean {
 }
 
 /**
- * Home hero row: real minted capsules that are already open (localStorage) +
- * demo seeds, both keyed to `chainNowSec` so “Opened X ago” matches the chain clock.
+ * Home hero row: public on-chain opened capsules + local mints + demo seeds,
+ * all keyed to `chainNowSec` so “Opened X ago” matches the chain clock.
  * Newest unlock time first; capped at `limit` (default 3).
  */
-export function buildHomeRecentlyOpenedCapsules(
+export async function buildHomeRecentlyOpenedCapsules(
   chainNowSec: number,
   limit = 3,
-): CapsuleItem[] {
+): Promise<CapsuleItem[]> {
   const now = Math.floor(chainNowSec);
   if (now <= 0) return [];
+
+  const onchainOpened = (await loadPublicOnchainCapsules()).filter((c) => {
+    const u = c.unlockAtUnix;
+    return u != null && isPlausibleOpened(u, now);
+  });
 
   const mintedOpened = loadMintedCapsules()
     .map(storedToCapsuleItem)
@@ -85,6 +92,9 @@ export function buildHomeRecentlyOpenedCapsules(
   }
   for (const m of mintedOpened) {
     byId.set(m.id, m);
+  }
+  for (const c of onchainOpened) {
+    byId.set(c.id, c);
   }
 
   const combined = [...byId.values()].sort(

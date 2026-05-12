@@ -79,7 +79,9 @@ export function MyCapsulesClient() {
   return (
     <div className="ritual-card-grid lg:grid-cols-3">
       {data.map((item) => (
-        <CapsuleGridSlot key={item.id}>
+        <CapsuleGridSlot
+          key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
+        >
           <CapsuleCard
             item={item}
             forceOpened={false}

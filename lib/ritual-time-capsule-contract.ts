@@ -1,4 +1,5 @@
 import type { Address } from "viem";
+import type { CapsuleTag } from "@/lib/capsule-categories";
 
 export type CapsuleContractEnv =
   | { status: "ok"; address: Address }
@@ -27,6 +28,15 @@ export function bytecodeLooksLikeRitualTimeCapsuleRepo(
  */
 export const RITUAL_CAPSULE_ABI = [
   {
+    type: "event",
+    name: "CapsuleMinted",
+    inputs: [
+      { name: "tokenId", type: "uint256", indexed: true },
+      { name: "owner", type: "address", indexed: true },
+      { name: "unlockTimestamp", type: "uint64", indexed: false },
+    ],
+  },
+  {
     type: "function",
     name: "mintCapsule",
     stateMutability: "nonpayable",
@@ -36,6 +46,13 @@ export const RITUAL_CAPSULE_ABI = [
       { name: "tokenURI", type: "string" },
     ],
     outputs: [{ name: "tokenId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "tokenURI",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "string" }],
   },
 ] as const;
 
@@ -89,17 +106,29 @@ export const ONCHAIN_CAPSULE_TOKEN_URI = "";
  * Опційно: дуже короткий URI, якщо колись знадобиться непорожній tokenURI для гаманців.
  * За замовчуванням мінт використовує ONCHAIN_CAPSULE_TOKEN_URI.
  */
-export function buildMintMetadataUri(message: string, tag: string): string {
-  const description = message.trim().slice(0, 64);
+export function buildMintMetadataUri(
+  message: string,
+  tag: CapsuleTag,
+  image = "",
+): string {
+  const fullMessage = message.trim();
   const payload = JSON.stringify({
-    name: "R",
-    d: description,
+    name: "Ritual Time Capsule",
+    description: fullMessage,
+    message: fullMessage,
+    tag,
+    image,
+    d: fullMessage.slice(0, 64),
     c: tag,
   });
   return `data:application/json,${payload}`;
 }
 
 /** On-chain `tokenURI` для mintCapsule (короткий data: JSON). */
-export function buildCapsuleTokenUri(message: string, tag: string): string {
-  return buildMintMetadataUri(message, tag);
+export function buildCapsuleTokenUri(
+  message: string,
+  tag: CapsuleTag,
+  image = "",
+): string {
+  return buildMintMetadataUri(message, tag, image);
 }

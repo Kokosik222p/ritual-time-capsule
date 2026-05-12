@@ -59,7 +59,10 @@ export function GalleryClient() {
   return (
     <div className="ritual-card-grid lg:grid-cols-4">
       {openedItems.map((item) => (
-        <CapsuleGridSlot key={item.id} scrollId={`capsule-${item.id}`}>
+        <CapsuleGridSlot
+          key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
+          scrollId={`capsule-${item.id}`}
+        >
           <CapsuleCard
             item={item}
             forceOpened

@@ -67,7 +67,9 @@ export function HomeRecentlyOpened() {
               </CapsuleGridSlot>
             ))
           : items.map((item) => (
-              <CapsuleGridSlot key={item.id}>
+              <CapsuleGridSlot
+                key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
+              >
                 <CapsuleCard
                   item={item}
                   variant="spotlight"
