@@ -27,6 +27,9 @@ export function bytecodeLooksLikeRitualTimeCapsuleRepo(
  * Має збігатися з `contracts/contracts/RitualTimeCapsule.sol`.
  */
 export const RITUAL_CAPSULE_ABI = [
+  { type: "error", name: "InvalidUnlockDate", inputs: [] },
+  { type: "error", name: "CapsuleDoesNotExist", inputs: [] },
+  { type: "error", name: "DailyMintLimitReached", inputs: [] },
   {
     type: "event",
     name: "CapsuleMinted",
@@ -46,6 +49,27 @@ export const RITUAL_CAPSULE_ABI = [
       { name: "tokenURI", type: "string" },
     ],
     outputs: [{ name: "tokenId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "DAILY_LIMIT",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "dailyMints",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lastMintDay",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
   },
   {
     type: "function",

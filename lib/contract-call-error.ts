@@ -5,6 +5,7 @@ import {
 } from "viem";
 
 const INVALID_UNLOCK_SELECTOR = "0x3bdb79ba";
+const DAILY_LIMIT_SELECTOR = "0x428ad7de";
 
 /** Текст помилки для UI після simulate / writeContract. */
 export function formatContractCallError(error: unknown): string {
@@ -19,6 +20,9 @@ export function formatContractCallError(error: unknown): string {
   if (raw.includes(INVALID_UNLOCK_SELECTOR)) {
     return "Час відкриття має бути пізнішим за час блоку мережі (InvalidUnlockDate). Оберіть дату хоча б на 1 годину пізніше за «зараз» або пресет 7 днів+ і підтвердіть у гаманці без довгої паузи.";
   }
+  if (raw.includes(DAILY_LIMIT_SELECTOR)) {
+    return "Ви вже використали денний ліміт: максимум 3 капсули на один гаманець за добу. Спробуйте знову завтра або використайте інший гаманець.";
+  }
   if (error instanceof BaseError) {
     if (error.walk((e) => e instanceof InsufficientFundsError)) {
       return "Недостатньо RITUAL на балансі для оплати газу.";
@@ -32,6 +36,9 @@ export function formatContractCallError(error: unknown): string {
       if (name) {
         if (name === "InvalidUnlockDate") {
           return "Час відкриття має бути пізніше за час блоку мережі (InvalidUnlockDate). Спробуйте пресет 7d+ або пізнішу дату.";
+        }
+        if (name === "DailyMintLimitReached") {
+          return "Ви вже використали денний ліміт: максимум 3 капсули на один гаманець за добу. Спробуйте знову завтра або використайте інший гаманець.";
         }
         return name;
       }

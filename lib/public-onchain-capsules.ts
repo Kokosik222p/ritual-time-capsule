@@ -12,6 +12,10 @@ const publicClient = createPublicClient({
   transport: http(),
 });
 
+const CAPSULE_MINTED_EVENT = RITUAL_CAPSULE_ABI.find(
+  (item) => item.type === "event" && item.name === "CapsuleMinted",
+);
+
 const DEFAULT_EVENT_LOOKBACK_BLOCKS = BigInt(2_000_000);
 const LOG_CHUNK_SIZE = BigInt(100_000);
 const LOGS_TIMEOUT_MS = 8_000;
@@ -181,7 +185,7 @@ async function loadMintLogsChunked(
       const chunk = (await withTimeout(
         publicClient.getLogs({
           address,
-          event: RITUAL_CAPSULE_ABI[0],
+          event: CAPSULE_MINTED_EVENT,
           fromBlock: chunkFrom,
           toBlock,
         }),

@@ -495,6 +495,52 @@ export function CreateCapsuleClient() {
           return;
         }
 
+        try {
+          const normalizedBlockTs =
+            rawBlockTs > BigInt(1_000_000_000_000)
+              ? rawBlockTs / BigInt(1000)
+              : rawBlockTs;
+          const today = normalizedBlockTs / BigInt(86400);
+          const [dailyLimit, mintedCount, lastMintDay] = await Promise.all([
+            publicClient.readContract({
+              address: capsuleAddress,
+              abi: RITUAL_CAPSULE_ABI,
+              functionName: "DAILY_LIMIT",
+            }),
+            publicClient.readContract({
+              address: capsuleAddress,
+              abi: RITUAL_CAPSULE_ABI,
+              functionName: "dailyMints",
+              args: [account.address],
+            }),
+            publicClient.readContract({
+              address: capsuleAddress,
+              abi: RITUAL_CAPSULE_ABI,
+              functionName: "lastMintDay",
+              args: [account.address],
+            }),
+          ]);
+          const mintedToday =
+            lastMintDay === today ? mintedCount : BigInt(0);
+
+          console.debug("[CreateCapsule] daily mint limit", {
+            today: today.toString(),
+            lastMintDay: lastMintDay.toString(),
+            mintedToday: mintedToday.toString(),
+            dailyLimit: dailyLimit.toString(),
+          });
+
+          if (mintedToday >= dailyLimit) {
+            pendingUnlockSentRef.current = null;
+            setMintError(
+              `Ви вже використали денний ліміт: ${dailyLimit.toString()} капсули на цей гаманець за добу. Спробуйте знову завтра.`,
+            );
+            return;
+          }
+        } catch (limitError) {
+          console.warn("[CreateCapsule] daily limit precheck failed", limitError);
+        }
+
         const onchainPhoto = await optimizePhotoForOnchain(photoUrl);
         const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag, onchainPhoto);
 
