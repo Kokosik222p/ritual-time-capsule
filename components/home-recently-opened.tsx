@@ -58,7 +58,7 @@ export function HomeRecentlyOpened() {
           ? Array.from({ length: HOME_OPEN_COUNT }, (_, i) => (
               <CapsuleGridSlot key={`sk-${i}`} hover={false}>
                 <div className="flex h-full min-h-[26rem] flex-col rounded-2xl border border-white/[0.08] bg-gradient-to-b from-zinc-950/90 to-black/90 p-4 sm:min-h-[28rem] md:min-h-[30rem] md:p-5">
-                  <div className="relative h-[13.5rem] w-full shrink-0 animate-pulse rounded-xl bg-white/[0.06] sm:h-[15.5rem] md:h-64" />
+                  <div className="relative aspect-[4/3] min-h-[14rem] w-full shrink-0 animate-pulse rounded-xl bg-white/[0.06] sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64" />
                   <div className="mt-4 min-h-[4.25rem] animate-pulse rounded-lg bg-white/[0.05]" />
                   <div className="mt-auto border-t border-white/[0.06] pt-4">
                     <div className="h-3 w-2/5 animate-pulse rounded bg-white/[0.06]" />

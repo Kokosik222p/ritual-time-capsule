@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import { formatOpenedAgo, formatSealedUntil } from "@/lib/time-format";
@@ -13,7 +13,7 @@ const CARD_MIN_H =
   "min-h-[26rem] sm:min-h-[28rem] md:min-h-[30rem]";
 
 const PHOTO_SHELL_DEFAULT =
-  "relative h-52 w-full shrink-0 overflow-hidden rounded-xl sm:h-56 md:h-60 " +
+  "relative aspect-[4/3] min-h-[14rem] w-full shrink-0 overflow-hidden rounded-xl bg-black/55 sm:aspect-auto sm:h-56 sm:min-h-0 md:h-60 " +
   "ring-1 ring-inset ring-white/25 " +
   "transition-[box-shadow,ring-color] duration-300 ease-out " +
   "group-hover:ring-white/40 " +
@@ -21,7 +21,7 @@ const PHOTO_SHELL_DEFAULT =
 
 /** Taller photo + tighter radius for Home “spotlight” row. */
 const PHOTO_SHELL_SPOTLIGHT =
-  "relative h-[13.5rem] w-full shrink-0 overflow-hidden rounded-[0.875rem] sm:h-[15.5rem] md:h-64 " +
+  "relative aspect-[4/3] min-h-[14rem] w-full shrink-0 overflow-hidden rounded-[0.875rem] bg-black/55 sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64 " +
   "ring-1 ring-inset ring-white/28 " +
   "transition-[box-shadow,ring-color] duration-300 ease-out " +
   "group-hover:ring-white/45 " +
@@ -80,6 +80,12 @@ export function CapsuleCard({
   const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">(
     "",
   );
+  const [photoFallback, setPhotoFallback] = useState(false);
+  const photoSrc = item.userPhoto || "";
+
+  useEffect(() => {
+    queueMicrotask(() => setPhotoFallback(false));
+  }, [photoSrc]);
 
   const chainNow = Math.floor(Number.isFinite(nowSec) ? nowSec : 0);
   const unlockRaw = item.unlockAtUnix;
@@ -115,8 +121,8 @@ export function CapsuleCard({
     : `rounded-2xl border border-white/10 bg-black/60 p-4`;
 
   const pulsePhotoH = spotlight
-    ? "h-[13.5rem] sm:h-[15.5rem] md:h-64"
-    : "h-52 sm:h-56 md:h-60";
+    ? "aspect-[4/3] min-h-[14rem] sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64"
+    : "aspect-[4/3] min-h-[14rem] sm:aspect-auto sm:h-56 sm:min-h-0 md:h-60";
 
   if (!ready) {
     return (
@@ -157,20 +163,30 @@ export function CapsuleCard({
           </>
         ) : (
           <>
-            {item.userPhoto ? (
-              <PhotoBlock spotlight={spotlight}>
+            {photoSrc ? (
+              <PhotoBlock key={photoSrc} spotlight={spotlight}>
                 <CategoryBadge tag={item.tag} spotlight={spotlight} />
-                <Image
-                  src={item.userPhoto}
-                  alt="Capsule content"
-                  fill
-                  className="bg-black/55 object-contain"
-                  unoptimized={
-                    item.userPhoto.startsWith("blob:") ||
-                    item.userPhoto.startsWith("data:")
-                  }
-                  sizes="(max-width: 768px) 100vw, 280px"
-                />
+                {photoFallback ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={`fallback-${photoSrc}`}
+                    src={photoSrc}
+                    alt="Capsule content"
+                    className="capsule-opened-photo"
+                    loading="lazy"
+                  />
+                ) : (
+                  <Image
+                    key={`next-${photoSrc}`}
+                    src={photoSrc}
+                    alt="Capsule content"
+                    fill
+                    className="capsule-opened-photo"
+                    unoptimized
+                    sizes="(max-width: 480px) calc(100vw - 48px), (max-width: 768px) calc(100vw - 64px), 280px"
+                    onError={() => setPhotoFallback(true)}
+                  />
+                )}
               </PhotoBlock>
             ) : (
               <PhotoBlock spotlight={spotlight}>

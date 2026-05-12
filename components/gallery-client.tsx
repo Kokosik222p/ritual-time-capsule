@@ -30,7 +30,7 @@ export function GalleryClient() {
         {Array.from({ length: 4 }, (_, i) => (
           <CapsuleGridSlot key={i} hover={false}>
             <div className="flex h-full min-h-[26rem] flex-col rounded-2xl border border-white/10 bg-black/75 p-4 sm:min-h-[28rem] md:min-h-[30rem]">
-              <div className="relative h-52 w-full shrink-0 animate-pulse rounded-xl bg-white/5 sm:h-56 md:h-60" />
+              <div className="relative aspect-[4/3] min-h-[14rem] w-full shrink-0 animate-pulse rounded-xl bg-white/5 sm:aspect-auto sm:h-56 sm:min-h-0 md:h-60" />
               <div className="mt-3 min-h-[4.25rem] animate-pulse rounded-lg bg-white/5" />
               <div className="mt-auto border-t border-white/5 pt-3">
                 <div className="h-3 w-1/2 animate-pulse rounded bg-white/5" />
