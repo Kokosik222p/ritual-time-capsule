@@ -229,6 +229,7 @@ export function CreateCapsuleClient() {
   const queryClient = useQueryClient();
   const savedMintTxRef = useRef<string | null>(null);
   const capsuleTag: CapsuleTag = tag === "Time" ? "Personal" : tag;
+  const chainNowSec = normalizeBlockTimestampToSeconds(nowSec);
 
   useEffect(() => {
     if (receipt?.status === "success" || receipt?.status === "reverted") {
@@ -285,8 +286,33 @@ export function CreateCapsuleClient() {
           ],
         );
 
+        if (unlockAt <= chainNowSec) {
+          queryClient.setQueryData<CapsuleItem[]>(
+            CAPSULE_QUERIES.gallery(),
+            (current = []) => [
+              optimisticCapsule,
+              ...current.filter((item) => item.id !== optimisticCapsule.id),
+            ],
+          );
+          queryClient.setQueryData<CapsuleItem[]>(
+            CAPSULE_QUERIES.homeRecentlyOpened(chainNowSec),
+            (current = []) => [
+              optimisticCapsule,
+              ...current.filter((item) => item.id !== optimisticCapsule.id),
+            ].slice(0, 3),
+          );
+        }
+
         const refreshCapsuleQueries = () =>
           Promise.all([
+            queryClient.removeQueries({
+              queryKey: CAPSULE_QUERIES.gallery(),
+              type: "inactive",
+            }),
+            queryClient.removeQueries({
+              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+              type: "inactive",
+            }),
             queryClient.invalidateQueries({
               queryKey: CAPSULE_QUERIES.user(address),
               refetchType: "all",
@@ -327,6 +353,7 @@ export function CreateCapsuleClient() {
     };
   }, [
     address,
+    chainNowSec,
     message,
     mintSucceeded,
     photoUrl,
@@ -349,7 +376,6 @@ export function CreateCapsuleClient() {
     });
   }
 
-  const chainNowSec = normalizeBlockTimestampToSeconds(nowSec);
   const minCustom =
     ready && chainNowSec > 0 ? toDatetimeLocalMin(chainNowSec + 60) : "";
 
