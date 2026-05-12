@@ -164,8 +164,11 @@ export function CapsuleCard({
                   src={item.userPhoto}
                   alt="Capsule content"
                   fill
-                  className="object-cover"
-                  unoptimized={item.userPhoto.startsWith("blob:")}
+                  className="bg-black/55 object-contain"
+                  unoptimized={
+                    item.userPhoto.startsWith("blob:") ||
+                    item.userPhoto.startsWith("data:")
+                  }
                   sizes="(max-width: 768px) 100vw, 280px"
                 />
               </PhotoBlock>

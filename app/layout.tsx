@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Web3Provider } from "@/components/web3-provider";
 import "./globals.css";
@@ -35,6 +36,7 @@ export default function RootLayout({
           <div className="flex min-h-full flex-col">
             <SiteHeader />
             <main className="flex-1">{children}</main>
+            <SiteFooter />
           </div>
         </Web3Provider>
       </body>

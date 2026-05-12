@@ -8,14 +8,6 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "images.unsplash.com",
       },
-      {
-        protocol: "https",
-        hostname: "*.vercel.app",
-      },
-      {
-        protocol: "https",
-        hostname: "**.vercel.app",
-      },
     ],
   },
   turbopack: {

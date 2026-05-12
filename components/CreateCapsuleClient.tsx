@@ -75,7 +75,7 @@ function toDatetimeLocalMin(sec: number) {
 function ClientOnly({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    setMounted(true);
+    queueMicrotask(() => setMounted(true));
   }, []);
   if (!mounted) return null;
   return <>{children}</>;
@@ -84,7 +84,7 @@ function ClientOnly({ children }: { children: React.ReactNode }) {
 export function CreateCapsuleClient() {
   const [clientMounted, setClientMounted] = useState(false);
   useEffect(() => {
-    setClientMounted(true);
+    queueMicrotask(() => setClientMounted(true));
   }, []);
 
   const { nowSec, ready } = useChainTime();
@@ -344,7 +344,6 @@ export function CreateCapsuleClient() {
       } catch (e) {
         pendingUnlockSentRef.current = null;
         setMintError(formatContractCallError(e));
-        console.error(e);
       } finally {
         setTxSubmitting(false);
       }
@@ -589,7 +588,7 @@ export function CreateCapsuleClient() {
                 <img
                   src={photoUrl}
                   alt="Your photo"
-                  className="h-full min-h-[14rem] w-full object-cover sm:min-h-[12rem]"
+                  className="h-full min-h-[14rem] w-full bg-black/55 object-contain sm:min-h-[12rem]"
                 />
               ) : (
                 <div className="flex h-full min-h-[14rem] items-center justify-center bg-black/40 px-4 text-center text-sm text-zinc-500 sm:min-h-[12rem]">
@@ -677,6 +676,15 @@ export function CreateCapsuleClient() {
                 e.target.value = "";
               }}
             />
+            <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.06] p-3 text-xs leading-relaxed text-cyan-100/85">
+              <span className="font-semibold text-cyan-100">
+                Privacy note:
+              </span>{" "}
+              photos are converted in your browser into a local
+              <span className="font-mono"> data:</span> URL for preview and
+              your local capsule list. We never upload or store your photos on
+              our servers. On-chain metadata is public and permanent.
+            </div>
           </div>
 
           <label className="block space-y-2 text-sm text-zinc-300">
