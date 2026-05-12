@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import { formatOpenedAgo, formatSealedUntil } from "@/lib/time-format";
@@ -80,12 +80,7 @@ export function CapsuleCard({
   const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">(
     "",
   );
-  const [photoFallback, setPhotoFallback] = useState(false);
   const photoSrc = item.userPhoto || "";
-
-  useEffect(() => {
-    queueMicrotask(() => setPhotoFallback(false));
-  }, [photoSrc]);
 
   const chainNow = Math.floor(Number.isFinite(nowSec) ? nowSec : 0);
   const unlockRaw = item.unlockAtUnix;
@@ -166,27 +161,16 @@ export function CapsuleCard({
             {photoSrc ? (
               <PhotoBlock key={photoSrc} spotlight={spotlight}>
                 <CategoryBadge tag={item.tag} spotlight={spotlight} />
-                {photoFallback ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={`fallback-${photoSrc}`}
-                    src={photoSrc}
-                    alt="Capsule content"
-                    className="capsule-opened-photo"
-                    loading="lazy"
-                  />
-                ) : (
-                  <Image
-                    key={`next-${photoSrc}`}
-                    src={photoSrc}
-                    alt="Capsule content"
-                    fill
-                    className="capsule-opened-photo"
-                    unoptimized
-                    sizes="(max-width: 480px) calc(100vw - 48px), (max-width: 768px) calc(100vw - 64px), 280px"
-                    onError={() => setPhotoFallback(true)}
-                  />
-                )}
+                {/* Dynamic blob/data images are more reliable as plain <img> on mobile. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  key={`opened-${item.id}-${photoSrc}`}
+                  src={photoSrc}
+                  alt="Capsule content"
+                  className="capsule-opened-photo"
+                  loading="lazy"
+                  decoding="async"
+                />
               </PhotoBlock>
             ) : (
               <PhotoBlock spotlight={spotlight}>
