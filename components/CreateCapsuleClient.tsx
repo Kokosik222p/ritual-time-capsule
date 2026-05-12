@@ -8,8 +8,10 @@ import {
   useAccount,
   useConnect,
   useConnectors,
+  usePublicClient,
   useSwitchChain,
   useWaitForTransactionReceipt,
+  useWalletClient,
   useWriteContract,
 } from "wagmi";
 import {
@@ -17,10 +19,13 @@ import {
   type CapsuleTag,
 } from "@/lib/capsule-categories";
 import { ritualTestnet } from "@/lib/chain";
+import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
+import { formatContractCallError } from "@/lib/contract-call-error";
 import {
-  buildCapsuleTokenUris,
+  buildCapsuleTokenUri,
+  bytecodeLooksLikeRitualTimeCapsuleRepo,
   getCapsuleContractEnv,
-  ritualTimeCapsuleAbi,
+  RITUAL_CAPSULE_ABI,
 } from "@/lib/ritual-time-capsule-contract";
 import {
   isConnectorAlreadyConnectedError,
@@ -66,20 +71,31 @@ function toDatetimeLocalMin(sec: number) {
   return d.toISOString().slice(0, 16);
 }
 
+/** Рендерить children лише після mount (уникає hydration mismatch). */
+function ClientOnly({ children }: { children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return null;
+  return <>{children}</>;
+}
+
 export function CreateCapsuleClient() {
+  const [clientMounted, setClientMounted] = useState(false);
+  useEffect(() => {
+    setClientMounted(true);
+  }, []);
+
   const { nowSec, ready } = useChainTime();
   const { address, chainId, isConnected } = useAccount();
   const connectors = useConnectors();
   const { connectAsync, isPending: isConnecting } = useConnect();
   const { switchChainAsync, isPending: isSwitching } = useSwitchChain();
-  const {
-    writeContractAsync,
-    isPending: isWritePending,
-    error: writeError,
-    reset: resetWrite,
-  } = useWriteContract();
+  const { error: writeError, reset: resetWrite } = useWriteContract();
 
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
+  const [txSubmitting, setTxSubmitting] = useState(false);
   const { data: receipt, isLoading: isConfirming } =
     useWaitForTransactionReceipt({
       hash: txHash,
@@ -96,16 +112,24 @@ export function CreateCapsuleClient() {
   const [pastUnlockOpen, setPastUnlockOpen] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
   const pendingMintToRef = useRef<Address | null>(null);
+  /** Unlock time, фактично відправлений у mint (після підгонки під block.timestamp контракту). */
+  const pendingUnlockSentRef = useRef<number | null>(null);
+
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient({ chainId: ritualTestnet.id });
 
   const unlockAtUnix = useMemo(() => {
-    if (!ready || nowSec <= 0) return 0;
+    const chainNow = normalizeBlockTimestampToSeconds(nowSec);
+    if (!ready || chainNow <= 0) return 0;
     if (preset === "custom") {
-      if (!customLocal) return nowSec + 30 * 86400;
+      if (!customLocal) return chainNow + 30 * 86400;
       const u = Math.floor(new Date(customLocal).getTime() / 1000);
-      return Number.isFinite(u) ? u : nowSec + 30 * 86400;
+      return Number.isFinite(u)
+        ? normalizeBlockTimestampToSeconds(u)
+        : chainNow + 30 * 86400;
     }
     const p = PRESETS.find((x) => x.id === preset);
-    return nowSec + (p?.seconds ?? 30 * 86400);
+    return chainNow + (p?.seconds ?? 30 * 86400);
   }, [customLocal, nowSec, preset, ready]);
 
   const contractEnv = useMemo(() => getCapsuleContractEnv(), []);
@@ -148,7 +172,10 @@ export function CreateCapsuleClient() {
         appendMintedCapsule({
           id: txHash,
           owner: address.toLowerCase(),
-          unlockAtUnix,
+          unlockAtUnix:
+            pendingUnlockSentRef.current != null
+              ? pendingUnlockSentRef.current
+              : unlockAtUnix,
           message: message.trim(),
           tag: capsuleTag,
           userPhoto,
@@ -186,11 +213,14 @@ export function CreateCapsuleClient() {
     });
   }
 
-  const minCustom = ready && nowSec > 0 ? toDatetimeLocalMin(nowSec + 60) : "";
+  const chainNowSec = normalizeBlockTimestampToSeconds(nowSec);
+  const minCustom =
+    ready && chainNowSec > 0 ? toDatetimeLocalMin(chainNowSec + 60) : "";
 
   const tagVisual = CATEGORY_VISUAL[capsuleTag];
 
-  const isMinting = isWritePending || (!!txHash && isConfirming);
+  const isMinting =
+    txSubmitting || (!!txHash && isConfirming);
 
   const runMint = useCallback(
     async (to: Address) => {
@@ -199,7 +229,9 @@ export function CreateCapsuleClient() {
 
       if (!capsuleAddress) {
         setMintError(
-          "Capsule contract is not configured. Set NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS.",
+          contractEnv.status === "invalid"
+            ? `Invalid capsule contract address: ${contractEnv.detail}`
+            : "Capsule contract address is missing.",
         );
         return;
       }
@@ -213,36 +245,120 @@ export function CreateCapsuleClient() {
         return;
       }
 
-      const { sealed, opened } = buildCapsuleTokenUris({
-        message: trimmed,
-        tag: capsuleTag,
-      });
+      if (!publicClient) {
+        setMintError("Немає з'єднання з RPC. Перезавантажте сторінку.");
+        return;
+      }
+      if (!walletClient) {
+        setMintError(
+          "Гаманець не готовий. Підключіть MetaMask і мережу Ritual Testnet (1979).",
+        );
+        return;
+      }
+
+      const account = walletClient.account;
+      if (!account) {
+        setMintError(
+          "MetaMask не надав активний акаунт. Розблокуйте гаманець і спробуйте знову.",
+        );
+        return;
+      }
+
+      if (account.address.toLowerCase() !== to.toLowerCase()) {
+        setMintError(
+          "Адреса в додатку не збігається з активним акаунтом у MetaMask. Підтвердіть мережу Ritual (1979) і спробуйте ще раз.",
+        );
+        return;
+      }
 
       setTxHash(undefined);
+      setTxSubmitting(true);
       try {
-        const hash = await writeContractAsync({
+        const latest = await publicClient.getBlock({ blockTag: "latest" });
+        const rawBlockTs = BigInt(latest.timestamp);
+        /**
+         * Ritual RPC повертає `block.timestamp` у мілісекундах (значення > 1e12).
+         * Контракт порівнює unlockTimestamp з `block.timestamp` у тих самих одиницях —
+         * якщо передати «секунди», умова unlock > block ламається і буде InvalidUnlockDate.
+         */
+        const chainClockMs = rawBlockTs > BigInt(1e12);
+        const unlockSec = BigInt(normalizeBlockTimestampToSeconds(unlockAtUnix));
+        let unlockArg: bigint;
+        if (chainClockMs) {
+          const msPerSec = BigInt(1000);
+          const marginMs = BigInt(60_000);
+          unlockArg = unlockSec * msPerSec;
+          if (unlockArg <= rawBlockTs) {
+            unlockArg = rawBlockTs + marginMs;
+          }
+          pendingUnlockSentRef.current = Number(unlockArg / msPerSec);
+        } else {
+          const blockTs = BigInt(
+            normalizeBlockTimestampToSeconds(Number(rawBlockTs)),
+          );
+          unlockArg = unlockSec;
+          if (unlockArg <= blockTs) {
+            unlockArg = blockTs + BigInt(60);
+          }
+          pendingUnlockSentRef.current = Number(unlockArg);
+        }
+
+        const bytecode = await publicClient.getBytecode({
           address: capsuleAddress,
-          abi: ritualTimeCapsuleAbi,
+        });
+        if (!bytecode || bytecode === "0x") {
+          pendingUnlockSentRef.current = null;
+          setMintError(
+            `За адресою ${capsuleAddress} немає контракту. Перевірте .env.local і деплой на Ritual.`,
+          );
+          return;
+        }
+        if (!bytecodeLooksLikeRitualTimeCapsuleRepo(bytecode)) {
+          pendingUnlockSentRef.current = null;
+          setMintError(
+            `Адреса ${capsuleAddress} — не збірка RitualTimeCapsule з каталогу contracts/ (у bytecode немає mintCapsule). Задеплойте з папки contracts: npx hardhat run scripts/deploy.js --network ritual (потрібен PRIVATE_KEY у .env), пропишіть нову адресу в NEXT_PUBLIC_RITUAL_CAPSULE_ADDRESS і перезапустіть npm run dev.`,
+          );
+          return;
+        }
+
+        const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag);
+
+        await publicClient.simulateContract({
+          address: capsuleAddress,
+          abi: RITUAL_CAPSULE_ABI,
           functionName: "mintCapsule",
-          args: [to, BigInt(unlockAtUnix), sealed, opened],
-          chainId: ritualTestnet.id,
+          args: [to, unlockArg, tokenURI],
+          account,
+          chain: ritualTestnet,
+        });
+
+        const hash = await walletClient.writeContract({
+          address: capsuleAddress,
+          abi: RITUAL_CAPSULE_ABI,
+          functionName: "mintCapsule",
+          args: [to, unlockArg, tokenURI],
+          account,
+          chain: ritualTestnet,
         });
         setTxHash(hash);
       } catch (e) {
-        const msg =
-          e instanceof Error ? e.message : "Mint failed. Please try again.";
-        setMintError(msg);
+        pendingUnlockSentRef.current = null;
+        setMintError(formatContractCallError(e));
         console.error(e);
+      } finally {
+        setTxSubmitting(false);
       }
     },
     [
       capsuleAddress,
+      capsuleTag,
+      contractEnv,
       message,
+      publicClient,
       ready,
       resetWrite,
-      capsuleTag,
       unlockAtUnix,
-      writeContractAsync,
+      walletClient,
     ],
   );
 
@@ -299,7 +415,7 @@ export function CreateCapsuleClient() {
     const to = await resolveMintRecipient();
     if (!to) return;
 
-    if (unlockAtUnix <= nowSec) {
+    if (unlockAtUnix <= chainNowSec) {
       pendingMintToRef.current = to;
       setPastUnlockOpen(true);
       return;
@@ -321,6 +437,7 @@ export function CreateCapsuleClient() {
 
   function handleCreateAnother() {
     savedMintTxRef.current = null;
+    pendingUnlockSentRef.current = null;
     setTxHash(undefined);
     setMintError(null);
     resetWrite();
@@ -338,7 +455,10 @@ export function CreateCapsuleClient() {
 
   if (mintSucceeded) {
     return (
-      <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6">
+      <div
+        className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6"
+        suppressHydrationWarning
+      >
         <section className="flex flex-col items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-b from-purple-950/40 via-black/50 to-cyan-950/25 px-5 py-12 text-center sm:px-6 sm:py-16">
           <div className="relative mx-auto h-56 w-56 sm:h-64 sm:w-64">
             <Image
@@ -384,7 +504,10 @@ export function CreateCapsuleClient() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6">
+    <div
+      className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:space-y-10 sm:py-10 md:px-6"
+      suppressHydrationWarning
+    >
       {pastUnlockOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
@@ -578,7 +701,7 @@ export function CreateCapsuleClient() {
           </h2>
           <p className="text-sm leading-relaxed text-zinc-400">
             Unlock timestamp uses the Ritual network clock (latest block time).
-            {!ready ? " Loading chain time…" : null}
+            {clientMounted && !ready ? " Loading chain time…" : null}
           </p>
 
           <div className="flex flex-wrap gap-2 sm:gap-2">
@@ -614,7 +737,7 @@ export function CreateCapsuleClient() {
               <span>Pick date &amp; time</span>
               <input
                 type="datetime-local"
-                min={minCustom}
+                min={clientMounted ? minCustom : undefined}
                 value={customLocal}
                 onChange={(e) => setCustomLocal(e.target.value)}
                 className="min-h-12 w-full rounded-xl border border-white/15 bg-black/50 px-4 py-3 text-base text-zinc-100 outline-none focus:border-cyan-500/40 md:min-h-0 md:py-2.5 md:text-sm"
@@ -625,61 +748,89 @@ export function CreateCapsuleClient() {
           <div className="rounded-xl border border-white/10 bg-black/35 p-4 text-sm text-zinc-400">
             <span className="text-zinc-500">Unlock at (Unix): </span>
             <span className="font-mono text-zinc-200">
-              {ready ? unlockAtUnix : "—"}
+              {clientMounted && ready ? unlockAtUnix : "—"}
             </span>
           </div>
 
-          {contractEnv.status !== "ok" ? (
-            <div
-              role="alert"
-              className="rounded-xl border border-red-500/40 bg-red-950/35 p-4 text-sm text-red-100/95"
-            >
-              <p className="font-semibold text-red-200">
-                {contractEnv.status === "unset"
-                  ? "Contract address is not configured"
-                  : "Invalid contract address in environment"}
-              </p>
-              <ol className="mt-3 list-decimal space-y-2 pl-5 text-red-100/85">
-                <li>
-                  Open{" "}
+          <ClientOnly>
+            {contractEnv.status === "unset" ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-4 text-sm text-amber-100/95"
+              >
+                <p className="font-semibold text-amber-200">
+                  Contract address is not configured
+                </p>
+                <p className="mt-2 text-amber-100/85">
+                  У корені проєкту в{" "}
                   <span className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
                     .env.local
                   </span>{" "}
-                  in the project root.
-                </li>
-                <li>
-                  Set exactly:{" "}
+                  вкажіть{" "}
                   <span className="font-mono text-xs break-all">
-                    NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS=0x…
+                    NEXT_PUBLIC_RITUAL_CAPSULE_ADDRESS=0x…
                   </span>{" "}
-                  (must be{" "}
-                  <span className="font-medium text-red-50">0x + 40 hex</span>{" "}
-                  characters, your deployed RitualTimeCapsule).
-                </li>
-                <li>
-                  Save the file and{" "}
-                  <span className="font-medium text-red-50">restart</span>{" "}
-                  <span className="font-mono text-xs">npm run dev</span> — Next.js
-                  reads <span className="font-mono text-xs">NEXT_PUBLIC_*</span>{" "}
-                  at startup.
-                </li>
-              </ol>
-              {contractEnv.status === "invalid" ? (
+                  — адресу вашого деплою{" "}
+                  <span className="font-mono text-xs">RitualTimeCapsule</span> з{" "}
+                  <span className="font-mono text-xs">contracts/</span>, потім
+                  перезапустіть <span className="font-mono text-xs">npm run dev</span>.
+                </p>
+              </div>
+            ) : null}
+
+            {contractEnv.status === "invalid" ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-red-500/40 bg-red-950/35 p-4 text-sm text-red-100/95"
+              >
+                <p className="font-semibold text-red-200">
+                  Invalid contract address in environment
+                </p>
+                <ol className="mt-3 list-decimal space-y-2 pl-5 text-red-100/85">
+                  <li>
+                    Open{" "}
+                    <span className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
+                      .env.local
+                    </span>{" "}
+                    in the project root.
+                  </li>
+                  <li>
+                    Set a valid address (must be{" "}
+                    <span className="font-medium text-red-50">0x + 40 hex</span>
+                    ), for example:{" "}
+                    <span className="font-mono text-xs break-all">
+                      NEXT_PUBLIC_RITUAL_CAPSULE_ADDRESS=0x…
+                    </span>{" "}
+                    (recommended) or legacy{" "}
+                    <span className="font-mono text-xs break-all">
+                      NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS=0x…
+                    </span>
+                    .
+                  </li>
+                  <li>
+                    Save the file and{" "}
+                    <span className="font-medium text-red-50">restart</span>{" "}
+                    <span className="font-mono text-xs">npm run dev</span> — Next.js
+                    reads <span className="font-mono text-xs">NEXT_PUBLIC_*</span>{" "}
+                    at startup.
+                  </li>
+                </ol>
                 <p className="mt-3 text-xs text-red-200/90">
                   {contractEnv.detail}
                 </p>
-              ) : null}
-            </div>
-          ) : null}
+              </div>
+            ) : null}
 
-          {displayMintError ? (
-            <p className="text-sm text-red-400/90">{displayMintError}</p>
-          ) : null}
+            {displayMintError ? (
+              <p className="text-sm text-red-400/90">{displayMintError}</p>
+            ) : null}
+          </ClientOnly>
 
           <button
             type="button"
             onClick={handleSealClick}
             disabled={
+              !clientMounted ||
               !ready ||
               !capsuleAddress ||
               !message.trim() ||
@@ -696,7 +847,7 @@ export function CreateCapsuleClient() {
                   ? "Connecting…"
                   : isSwitching
                     ? "Switching network…"
-                    : isWritePending
+                    : txSubmitting
                       ? "Confirm in wallet…"
                       : "Sealing on-chain…"}
               </span>

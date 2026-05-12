@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract RitualTimeCapsule is ERC721, Ownable {
+    struct Capsule {
+        uint64 unlockTimestamp;
+        string tokenURI;        // один URI (sealed або opened)
+    }
+
+    uint256 private _nextTokenId = 1;
+    mapping(uint256 => Capsule) private _capsules;
+
+    error InvalidUnlockDate();
+    error CapsuleDoesNotExist();
+
+    event CapsuleMinted(uint256 indexed tokenId, address indexed owner, uint64 unlockTimestamp);
+
+    constructor() ERC721("Ritual Time Capsule", "RTC") Ownable(msg.sender) {}
+
+    function mintCapsule(
+        address to,
+        uint64 unlockTimestamp,
+        string calldata tokenURI
+    ) external returns (uint256 tokenId) {
+        if (unlockTimestamp <= block.timestamp) revert InvalidUnlockDate();
+
+        tokenId = _nextTokenId++;
+        _mint(to, tokenId);
+
+        _capsules[tokenId] = Capsule({
+            unlockTimestamp: unlockTimestamp,
+            tokenURI: tokenURI
+        });
+
+        emit CapsuleMinted(tokenId, to, unlockTimestamp);
+    }
+
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
+        if (_ownerOf(tokenId) == address(0)) revert CapsuleDoesNotExist();
+
+        Capsule memory c = _capsules[tokenId];
+        return c.tokenURI;   // фронтенд сам вирішує sealed/opened
+    }
+
+    function isOpened(uint256 tokenId) external view returns (bool) {
+        if (_ownerOf(tokenId) == address(0)) revert CapsuleDoesNotExist();
+        return block.timestamp >= _capsules[tokenId].unlockTimestamp;
+    }
+}

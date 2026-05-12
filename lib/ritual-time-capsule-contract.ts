@@ -1,6 +1,5 @@
 import type { Address } from "viem";
 
-/** RitualTimeCapsule — on-chain mint. Set `NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS` in `.env.local`. */
 export type CapsuleContractEnv =
   | { status: "ok"; address: Address }
   | { status: "unset" }
@@ -8,10 +7,61 @@ export type CapsuleContractEnv =
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
-/** Validates env; use for UI messages. Restart `next dev` after changing `.env.local`. */
+/**
+ * У runtime-коді збірки `contracts/contracts/RitualTimeCapsule.sol` є `PUSH4` + селектор
+ * `mintCapsule(address,uint64,string)` → байти `636a06aabb`.
+ * На адресі без цього фрагмента виклик `mintCapsule` потрапляє у fallback → «execution reverted».
+ */
+const MINT_CAPSULE_PUSH4 = "636a06aabb";
+
+export function bytecodeLooksLikeRitualTimeCapsuleRepo(
+  bytecode: string | undefined,
+): boolean {
+  if (!bytecode || bytecode === "0x") return false;
+  return bytecode.toLowerCase().includes(MINT_CAPSULE_PUSH4);
+}
+
+/**
+ * ABI RitualTimeCapsule: mintCapsule(address to, uint64 unlockTimestamp, string tokenURI).
+ * Має збігатися з `contracts/contracts/RitualTimeCapsule.sol`.
+ */
+export const RITUAL_CAPSULE_ABI = [
+  {
+    type: "function",
+    name: "mintCapsule",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "unlockTimestamp", type: "uint64" },
+      { name: "tokenURI", type: "string" },
+    ],
+    outputs: [{ name: "tokenId", type: "uint256" }],
+  },
+] as const;
+
+/** @deprecated Використовуйте RITUAL_CAPSULE_ABI — те саме значення. */
+export const ritualTimeCapsuleAbi = RITUAL_CAPSULE_ABI;
+
+/**
+ * Читаємо лише явні `process.env.NEXT_PUBLIC_*` — інакше Next/Turbopack не інлайнить
+ * значення в клієнтський бандл (динамічний `process.env[key]` лишається порожнім у браузері).
+ */
+function capsuleContractAddressRawFromEnv(): string {
+  return (
+    process.env.NEXT_PUBLIC_RITUAL_CAPSULE_ADDRESS?.trim() ||
+    process.env.NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS?.trim() ||
+    process.env.RITUAL_CAPSULE_ADDRESS?.trim() ||
+    ""
+  );
+}
+
+/**
+ * Адреса лише з env (без «магічного» дефолту — на чейні має бути саме ваш деплой з `contracts/`).
+ * Після зміни `.env.local` перезапустіть `next dev` — `NEXT_PUBLIC_*` підставляються на старті збірки.
+ */
 export function getCapsuleContractEnv(): CapsuleContractEnv {
-  const raw =
-    process.env.NEXT_PUBLIC_RITUAL_TIME_CAPSULE_ADDRESS?.trim() ?? "";
+  const raw = capsuleContractAddressRawFromEnv();
+
   if (!raw) return { status: "unset" };
   if (!ADDRESS_RE.test(raw)) {
     const hexPart = raw.startsWith("0x") ? raw.slice(2) : raw;
@@ -24,47 +74,32 @@ export function getCapsuleContractEnv(): CapsuleContractEnv {
   return { status: "ok", address: raw as Address };
 }
 
-export const ritualTimeCapsuleAbi = [
-  {
-    type: "function",
-    name: "mintCapsule",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "unlockTimestamp", type: "uint256" },
-      { name: "sealedTokenURI", type: "string" },
-      { name: "openedTokenURI", type: "string" },
-    ],
-    outputs: [],
-  },
-] as const;
-
 export function getRitualCapsuleAddress(): Address | null {
   const env = getCapsuleContractEnv();
   return env.status === "ok" ? env.address : null;
 }
 
-export function buildCapsuleTokenUris(params: {
-  message: string;
-  tag: string;
-}): { sealed: string; opened: string } {
-  const sealed = {
-    name: "Ritual Time Capsule (Sealed)",
-    description: params.message.slice(0, 500),
-    attributes: [
-      { trait_type: "Category", value: params.tag },
-      { trait_type: "State", value: "sealed" },
-    ],
-  };
-  const opened = {
-    name: "Ritual Time Capsule (Opened)",
-    description: params.message.slice(0, 500),
-    attributes: [
-      { trait_type: "Category", value: params.tag },
-      { trait_type: "State", value: "opened" },
-    ],
-  };
-  const toDataUri = (obj: object) =>
-    `data:application/json;utf8,${encodeURIComponent(JSON.stringify(obj))}`;
-  return { sealed: toDataUri(sealed), opened: toDataUri(opened) };
+/**
+ * Порожній URI на чейні = мінімальний газ (рядок не пишеться в storage як довгий payload).
+ * Повні текст/фото лишаються в локальному сховищі додатку після успішного mint.
+ */
+export const ONCHAIN_CAPSULE_TOKEN_URI = "";
+
+/**
+ * Опційно: дуже короткий URI, якщо колись знадобиться непорожній tokenURI для гаманців.
+ * За замовчуванням мінт використовує ONCHAIN_CAPSULE_TOKEN_URI.
+ */
+export function buildMintMetadataUri(message: string, tag: string): string {
+  const description = message.trim().slice(0, 64);
+  const payload = JSON.stringify({
+    name: "R",
+    d: description,
+    c: tag,
+  });
+  return `data:application/json,${payload}`;
+}
+
+/** On-chain `tokenURI` для mintCapsule (короткий data: JSON). */
+export function buildCapsuleTokenUri(message: string, tag: string): string {
+  return buildMintMetadataUri(message, tag);
 }

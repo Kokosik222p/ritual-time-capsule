@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { WagmiProvider, useReconnect } from "wagmi";
+import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import { wagmiConfig } from "@/lib/wagmi-config";
 
 const queryClient = new QueryClient({
@@ -59,11 +60,11 @@ function ChainTimeBridge({ children }: { children: ReactNode }) {
         const r = await fetch("/api/chain-now");
         const j: { now?: number } = await r.json();
         if (!cancelled && typeof j.now === "number") {
-          setNowSec(j.now);
+          setNowSec(normalizeBlockTimestampToSeconds(j.now));
         }
       } catch {
         if (!cancelled) {
-          setNowSec(Math.floor(Date.now() / 1000));
+          setNowSec(normalizeBlockTimestampToSeconds(Date.now()));
         }
       } finally {
         if (!cancelled) {
