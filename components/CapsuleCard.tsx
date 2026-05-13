@@ -82,20 +82,23 @@ export function CapsuleCard({
   );
   const photoSrc = item.userPhoto || "";
 
-  const chainNow = Math.floor(Number.isFinite(nowSec) ? nowSec : 0);
+  const fallbackNow = Math.floor(Date.now() / 1000);
+  const chainNow =
+    ready && Number.isFinite(nowSec) && nowSec > 0
+      ? Math.floor(nowSec)
+      : fallbackNow;
   const unlockRaw = item.unlockAtUnix;
-  const unlockForSealed = unlockRaw ?? 9999999999;
-  /** Sealed artwork only when not forcing “opened” UI (e.g. Home always forces open). */
+  const unlockForSealed = unlockRaw ?? Number.MAX_SAFE_INTEGER;
+  const hasUnlockTime = unlockRaw != null && Number.isFinite(unlockRaw);
+  const hasTimePassed = hasUnlockTime && Math.floor(unlockRaw) <= chainNow;
   const isSealed =
     !forceOpened &&
-    ready &&
     chainNow > 0 &&
-    unlockRaw != null &&
+    hasUnlockTime &&
     unlockForSealed > chainNow;
-  const isOpenedVisual = forceOpened || !isSealed;
+  const isOpenedVisual = forceOpened || hasTimePassed || !isSealed;
 
   const timeLabel = (() => {
-    if (!ready || chainNow <= 0) return "Syncing chain time…";
     if (forceOpened) {
       const u = unlockRaw;
       if (u == null || !Number.isFinite(u)) {
@@ -115,28 +118,6 @@ export function CapsuleCard({
   const cardBase = spotlight
     ? `rounded-2xl border border-white/[0.1] bg-gradient-to-b from-zinc-950/95 to-black/[0.93] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:p-5`
     : `rounded-2xl border border-white/10 bg-black/60 p-4`;
-
-  const pulsePhotoH = spotlight
-    ? "aspect-[4/3] min-h-[14rem] sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64"
-    : "aspect-[4/3] min-h-[14rem] sm:aspect-auto sm:h-56 sm:min-h-0 md:h-60";
-
-  if (!ready) {
-    return (
-      <div
-        className={`group flex h-full ${CARD_MIN_H} flex-col ${cardBase} ${className}`}
-      >
-        <div
-          className={`relative w-full shrink-0 animate-pulse overflow-hidden rounded-xl bg-white/5 ring-1 ring-inset ring-white/15 ${pulsePhotoH}`}
-        />
-        <div
-          className={`mt-3 ${MESSAGE_MIN} animate-pulse rounded-lg bg-white/5`}
-        />
-        <div className="mt-auto border-t border-white/5 pt-3 md:pt-4">
-          <div className="h-3 w-1/2 animate-pulse rounded bg-white/5" />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div

@@ -84,22 +84,26 @@ export async function buildMyCapsulesList(
 }
 
 /** Full gallery pool: public on-chain capsules only. */
-export async function buildGalleryPool(): Promise<CapsuleItem[]> {
+export async function buildGalleryPool(chainNowSec?: number): Promise<CapsuleItem[]> {
   const capsules = await loadPublicOnchainCapsules();
-  const withPublicContent = sortNewestOpenedFirst(
-    dedupeById(capsules.filter(hasPublicContent)),
-  );
+  const withPublicContent = dedupeById(capsules.filter(hasPublicContent));
+  const opened =
+    chainNowSec != null && Math.floor(chainNowSec) > 0
+      ? filterOpenedAtChainTime(withPublicContent, chainNowSec)
+      : sortNewestOpenedFirst(withPublicContent);
   console.debug("[GalleryPool] public capsules", {
     count: capsules.length,
     withPublicContent: withPublicContent.length,
-    items: withPublicContent.map((item) => ({
+    opened: opened.length,
+    chainNowSec: chainNowSec ?? null,
+    items: opened.map((item) => ({
       id: item.id,
       unlockAtUnix: item.unlockAtUnix,
       hasPhoto: Boolean(item.userPhoto),
       messageLength: item.message.length,
     })),
   });
-  return withPublicContent;
+  return opened;
 }
 
 /** Only capsules that are open at `chainNowSec`. */

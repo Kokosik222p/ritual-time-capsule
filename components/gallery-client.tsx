@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
@@ -13,6 +13,8 @@ import {
 
 export function GalleryClient() {
   const { nowSec, ready } = useChainTime();
+  const hasChainNow = ready && nowSec > 0;
+  const queryClient = useQueryClient();
 
   const {
     data: pool,
@@ -20,22 +22,43 @@ export function GalleryClient() {
     isPending,
   } = useQuery({
     queryKey: CAPSULE_QUERIES.gallery(),
-    queryFn: () => buildGalleryPool(),
-    staleTime: 10_000,
+    queryFn: () => buildGalleryPool(nowSec),
+    enabled: hasChainNow,
+    staleTime: 2_000,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: 25_000,
+    refetchInterval: 5_000,
   });
 
   const openedItems = useMemo(() => {
-    if (!ready || nowSec <= 0 || !pool) return [];
+    if (!hasChainNow || !pool) return [];
     return filterOpenedAtChainTime(pool, nowSec);
-  }, [pool, nowSec, ready]);
+  }, [pool, nowSec, hasChainNow]);
 
   useEffect(() => {
-    if (!ready || nowSec <= 0 || pool === undefined) return;
+    if (!hasChainNow) return;
+    void queryClient.refetchQueries({
+      queryKey: CAPSULE_QUERIES.gallery(),
+      type: "active",
+    });
+  }, [hasChainNow, nowSec, queryClient]);
+
+  useEffect(() => {
+    if (!hasChainNow) return;
+    void queryClient.refetchQueries({
+      queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+      type: "active",
+    });
+    void queryClient.refetchQueries({
+      queryKey: CAPSULE_QUERIES.root,
+      type: "active",
+    });
+  }, [hasChainNow, nowSec, queryClient]);
+
+  useEffect(() => {
+    if (!hasChainNow || pool === undefined) return;
     console.debug("[GalleryClient] loaded", {
       nowSec,
       total: pool.length,
@@ -49,7 +72,7 @@ export function GalleryClient() {
         messageLength: item.message.length,
       })),
     });
-  }, [error, nowSec, openedItems.length, pool, ready]);
+  }, [error, nowSec, openedItems.length, pool, hasChainNow]);
 
   if (isPending && pool === undefined) {
     return (
@@ -69,7 +92,7 @@ export function GalleryClient() {
     );
   }
 
-  if (!ready || nowSec <= 0) {
+  if (!hasChainNow) {
     return (
       <p className="text-sm text-zinc-500">Syncing chain time for gallery…</p>
     );

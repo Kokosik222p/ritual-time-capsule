@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import Link from "next/link";
 import { CapsuleCard } from "@/components/CapsuleCard";
@@ -14,17 +14,18 @@ const HOME_OPEN_COUNT = 3;
 export function HomeRecentlyOpened() {
   const { nowSec, ready } = useChainTime();
   const hasChainNow = ready && nowSec > 0;
+  const queryClient = useQueryClient();
 
   const { data, isPending } = useQuery({
     queryKey: CAPSULE_QUERIES.homeRecentlyOpened(nowSec),
     queryFn: () => buildHomeRecentlyOpenedCapsules(nowSec, HOME_OPEN_COUNT),
     enabled: hasChainNow,
-    staleTime: 10_000,
+    staleTime: 2_000,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: 25_000,
+    refetchInterval: 5_000,
   });
 
   const items = data ?? [];
@@ -43,6 +44,14 @@ export function HomeRecentlyOpened() {
       })),
     });
   }, [data, hasChainNow, nowSec]);
+
+  useEffect(() => {
+    if (!hasChainNow) return;
+    void queryClient.refetchQueries({
+      queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+      type: "active",
+    });
+  }, [hasChainNow, nowSec, queryClient]);
 
   return (
     <section

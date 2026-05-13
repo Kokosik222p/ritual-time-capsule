@@ -1,15 +1,18 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
+import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import { buildMyCapsulesList } from "@/lib/capsule-lists";
 
 export function MyCapsulesClient() {
   const { address, isConnected } = useAccount();
+  const { nowSec, ready } = useChainTime();
+  const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
   const walletReady = mounted && isConnected && Boolean(address);
 
@@ -17,11 +20,27 @@ export function MyCapsulesClient() {
     queueMicrotask(() => setMounted(true));
   }, []);
 
-  const { data, isLoading } = useQuery({
+  const { data, isPending } = useQuery({
     queryKey: CAPSULE_QUERIES.user(address),
     queryFn: () => buildMyCapsulesList(address),
     enabled: walletReady,
+    staleTime: 2_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previousData) => previousData,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 5_000,
   });
+
+  useEffect(() => {
+    if (!walletReady || !ready || nowSec <= 0) return;
+    void queryClient.refetchQueries({
+      queryKey: CAPSULE_QUERIES.user(address),
+      type: "active",
+    });
+  }, [address, nowSec, queryClient, ready, walletReady]);
+
+  const items = data ?? [];
 
   if (!mounted) {
     return (
@@ -50,7 +69,7 @@ export function MyCapsulesClient() {
     );
   }
 
-  if (isLoading || !data) {
+  if (isPending && data === undefined) {
     return (
       <div className="ritual-card-grid lg:grid-cols-3">
         {Array.from({ length: 3 }, (_, i) => (
@@ -68,7 +87,7 @@ export function MyCapsulesClient() {
     );
   }
 
-  if (data.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="rounded-2xl border border-white/[0.08] bg-black/55 p-6 text-sm leading-relaxed text-zinc-400">
         No capsules found for this wallet yet.
@@ -78,7 +97,7 @@ export function MyCapsulesClient() {
 
   return (
     <div className="ritual-card-grid lg:grid-cols-3">
-      {data.map((item) => (
+      {items.map((item) => (
         <CapsuleGridSlot
           key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
         >
