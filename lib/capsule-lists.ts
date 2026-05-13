@@ -3,13 +3,19 @@ import {
   storedToCapsuleItem,
 } from "@/lib/minted-capsules-storage";
 import { loadPublicOnchainCapsules } from "@/lib/public-onchain-capsules";
+import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import type { CapsuleItem } from "@/lib/capsule-types";
+
+function normalizeOptionalUnixTime(value: number | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined;
+  return normalizeBlockTimestampToSeconds(value);
+}
 
 function dedupeKey(item: CapsuleItem): string {
   return [
     item.id,
     item.owner?.toLowerCase() ?? "",
-    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
+    normalizeOptionalUnixTime(item.unlockAtUnix)?.toString() ?? "",
     item.message.trim(),
     item.tag,
   ].join("|");
@@ -18,7 +24,7 @@ function dedupeKey(item: CapsuleItem): string {
 function canonicalCapsuleKey(item: CapsuleItem): string {
   return [
     item.owner?.toLowerCase() ?? "",
-    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
+    normalizeOptionalUnixTime(item.unlockAtUnix)?.toString() ?? "",
     item.message.trim(),
     item.tag,
   ].join("|");
@@ -57,13 +63,17 @@ function hasPublicContent(item: CapsuleItem): boolean {
 }
 
 function isOpenedAtChainTime(item: CapsuleItem, chainNowSec: number): boolean {
-  const now = Math.floor(chainNowSec);
-  const unlockAt = item.unlockAtUnix;
+  const now = normalizeBlockTimestampToSeconds(chainNowSec);
+  const unlockAt = normalizeOptionalUnixTime(item.unlockAtUnix);
   return unlockAt != null && unlockAt <= now;
 }
 
 function sortNewestOpenedFirst(items: CapsuleItem[]): CapsuleItem[] {
-  return [...items].sort((a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0));
+  return [...items].sort(
+    (a, b) =>
+      (normalizeOptionalUnixTime(b.unlockAtUnix) ?? 0) -
+      (normalizeOptionalUnixTime(a.unlockAtUnix) ?? 0),
+  );
 }
 
 /** My Capsules: only capsules owned by the connected wallet. */
@@ -117,7 +127,9 @@ export function filterOpenedAtChainTime(
 }
 
 function isPlausibleOpened(u: number, now: number): boolean {
-  if (!Number.isFinite(u) || u > now) return false;
+  const unlockAt = normalizeBlockTimestampToSeconds(u);
+  const chainNow = normalizeBlockTimestampToSeconds(now);
+  if (!Number.isFinite(unlockAt) || unlockAt > chainNow) return false;
   return true;
 }
 
@@ -129,12 +141,12 @@ export async function buildHomeRecentlyOpenedCapsules(
   chainNowSec: number,
   limit = 3,
 ): Promise<CapsuleItem[]> {
-  const now = Math.floor(chainNowSec);
+  const now = normalizeBlockTimestampToSeconds(chainNowSec);
   if (now <= 0) return [];
 
   const loaded = await loadPublicOnchainCapsules();
   const onchainOpened = loaded.filter((c) => {
-    const u = c.unlockAtUnix;
+    const u = normalizeOptionalUnixTime(c.unlockAtUnix);
     return u != null && isPlausibleOpened(u, now) && hasPublicContent(c);
   });
 

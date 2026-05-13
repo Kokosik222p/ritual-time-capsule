@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useState, type ReactNode } from "react";
 import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
+import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import { formatOpenedAgo, formatSealedUntil } from "@/lib/time-format";
 import { useChainTime } from "@/components/web3-provider";
 
@@ -61,6 +62,11 @@ function PhotoBlock({
   );
 }
 
+function normalizeOptionalUnixTime(value: number | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined;
+  return normalizeBlockTimestampToSeconds(value);
+}
+
 export function CapsuleCard({
   item,
   forceOpened = false,
@@ -85,12 +91,12 @@ export function CapsuleCard({
   const fallbackNow = Math.floor(Date.now() / 1000);
   const chainNow =
     ready && Number.isFinite(nowSec) && nowSec > 0
-      ? Math.floor(nowSec)
+      ? normalizeBlockTimestampToSeconds(nowSec)
       : fallbackNow;
-  const unlockRaw = item.unlockAtUnix;
+  const unlockRaw = normalizeOptionalUnixTime(item.unlockAtUnix);
   const unlockForSealed = unlockRaw ?? Number.MAX_SAFE_INTEGER;
-  const hasUnlockTime = unlockRaw != null && Number.isFinite(unlockRaw);
-  const hasTimePassed = hasUnlockTime && Math.floor(unlockRaw) <= chainNow;
+  const hasUnlockTime = unlockRaw != null;
+  const hasTimePassed = hasUnlockTime && unlockRaw <= chainNow;
   const isSealed =
     !forceOpened &&
     chainNow > 0 &&

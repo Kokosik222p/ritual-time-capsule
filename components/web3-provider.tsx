@@ -74,7 +74,7 @@ function ChainTimeBridge({ children }: { children: ReactNode }) {
     }
 
     pull();
-    const id = setInterval(pull, 25_000);
+    const id = setInterval(pull, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
