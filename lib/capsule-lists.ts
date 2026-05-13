@@ -62,6 +62,10 @@ function isOpenedAtChainTime(item: CapsuleItem, chainNowSec: number): boolean {
   return unlockAt != null && unlockAt <= now;
 }
 
+function sortNewestOpenedFirst(items: CapsuleItem[]): CapsuleItem[] {
+  return [...items].sort((a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0));
+}
+
 /** My Capsules: only capsules owned by the connected wallet. */
 export async function buildMyCapsulesList(
   walletAddress: string | undefined,
@@ -82,7 +86,9 @@ export async function buildMyCapsulesList(
 /** Full gallery pool: public on-chain capsules only. */
 export async function buildGalleryPool(): Promise<CapsuleItem[]> {
   const capsules = await loadPublicOnchainCapsules();
-  const withPublicContent = dedupeById(capsules.filter(hasPublicContent));
+  const withPublicContent = sortNewestOpenedFirst(
+    dedupeById(capsules.filter(hasPublicContent)),
+  );
   console.debug("[GalleryPool] public capsules", {
     count: capsules.length,
     withPublicContent: withPublicContent.length,
@@ -101,14 +107,13 @@ export function filterOpenedAtChainTime(
   items: CapsuleItem[],
   chainNowSec: number,
 ): CapsuleItem[] {
-  return items.filter((item) => isOpenedAtChainTime(item, chainNowSec));
+  return sortNewestOpenedFirst(
+    items.filter((item) => isOpenedAtChainTime(item, chainNowSec)),
+  );
 }
-
-const MAX_HOME_AGE_SEC = 25 * 365 * 86400;
 
 function isPlausibleOpened(u: number, now: number): boolean {
   if (!Number.isFinite(u) || u > now) return false;
-  if (now - u > MAX_HOME_AGE_SEC) return false;
   return true;
 }
 
@@ -129,9 +134,7 @@ export async function buildHomeRecentlyOpenedCapsules(
     return u != null && isPlausibleOpened(u, now) && hasPublicContent(c);
   });
 
-  const combined = dedupeById(onchainOpened).sort(
-    (a, b) => (b.unlockAtUnix ?? 0) - (a.unlockAtUnix ?? 0),
-  );
+  const combined = sortNewestOpenedFirst(dedupeById(onchainOpened));
 
   console.debug("[HomeRecentlyOpenedBuilder] opened capsules", {
     now,

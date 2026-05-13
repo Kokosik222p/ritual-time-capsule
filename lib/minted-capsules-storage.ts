@@ -7,7 +7,7 @@ export type StoredMintedCapsule = {
   unlockAtUnix: number;
   message: string;
   tag: CapsuleTag;
-  /** Data URL or https URL; empty if no photo was kept. */
+  /** Never persist user photos locally; public photos are read from on-chain metadata. */
   userPhoto: string;
 };
 
@@ -46,13 +46,17 @@ function writeAll(items: StoredMintedCapsule[]) {
 export function loadMintedCapsules(): StoredMintedCapsule[] {
   const all = readRaw();
   const seen = new Set<string>();
-  const deduped = all.filter((item) => {
+  const sanitized = all.map((item) => ({ ...item, userPhoto: "" }));
+  const deduped = sanitized.filter((item) => {
     const key = canonicalMintKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  if (deduped.length !== all.length) {
+  if (
+    deduped.length !== all.length ||
+    all.some((item) => item.userPhoto.trim().length > 0)
+  ) {
     writeAll(deduped);
   }
   return deduped;
@@ -60,11 +64,12 @@ export function loadMintedCapsules(): StoredMintedCapsule[] {
 
 export function appendMintedCapsule(item: StoredMintedCapsule): void {
   const all = readRaw();
-  const itemKey = canonicalMintKey(item);
+  const sanitized = { ...item, userPhoto: "" };
+  const itemKey = canonicalMintKey(sanitized);
   const rest = all.filter(
     (x) => x.id !== item.id && canonicalMintKey(x) !== itemKey,
   );
-  writeAll([item, ...rest]);
+  writeAll([sanitized, ...rest.map((x) => ({ ...x, userPhoto: "" }))]);
 }
 
 export function storedToCapsuleItem(s: StoredMintedCapsule): CapsuleItem {
@@ -76,24 +81,4 @@ export function storedToCapsuleItem(s: StoredMintedCapsule): CapsuleItem {
     tag: s.tag,
     unlockAtUnix: s.unlockAtUnix,
   };
-}
-
-export async function blobUrlToPersistedPhoto(
-  photoUrl: string | null,
-): Promise<string> {
-  if (!photoUrl) return "";
-  if (photoUrl.startsWith("data:")) return photoUrl;
-  if (!photoUrl.startsWith("blob:")) return photoUrl;
-  try {
-    const blob = await fetch(photoUrl).then((r) => r.blob());
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () =>
-        resolve(typeof reader.result === "string" ? reader.result : "");
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return "";
-  }
 }

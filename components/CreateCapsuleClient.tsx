@@ -33,10 +33,7 @@ import {
 } from "@/lib/wallet-connection";
 import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
-import {
-  appendMintedCapsule,
-  blobUrlToPersistedPhoto,
-} from "@/lib/minted-capsules-storage";
+import { appendMintedCapsule } from "@/lib/minted-capsules-storage";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import type { Address } from "viem";
 
@@ -215,6 +212,8 @@ export function CreateCapsuleClient() {
   const pendingMintToRef = useRef<Address | null>(null);
   /** Unlock time, фактично відправлений у mint (після підгонки під block.timestamp контракту). */
   const pendingUnlockSentRef = useRef<number | null>(null);
+  /** Optimized data URI used only in memory until public on-chain metadata refetches. */
+  const pendingOnchainPhotoRef = useRef<string>("");
 
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient({ chainId: ritualTestnet.id });
@@ -276,20 +275,20 @@ export function CreateCapsuleClient() {
     let cancelled = false;
     (async () => {
       try {
-        const userPhoto = await blobUrlToPersistedPhoto(photoUrl);
         if (cancelled) return;
         const owner = address.toLowerCase();
         const unlockAt =
           pendingUnlockSentRef.current != null
             ? pendingUnlockSentRef.current
             : unlockAtUnix;
+        const onchainPhoto = pendingOnchainPhotoRef.current;
         const optimisticCapsule: CapsuleItem = {
           id: txHash,
           owner,
           unlockAtUnix: unlockAt,
           message: message.trim(),
           tag: capsuleTag,
-          userPhoto,
+          userPhoto: onchainPhoto,
         };
 
         appendMintedCapsule({
@@ -298,7 +297,7 @@ export function CreateCapsuleClient() {
           unlockAtUnix: unlockAt,
           message: optimisticCapsule.message,
           tag: optimisticCapsule.tag,
-          userPhoto: optimisticCapsule.userPhoto,
+          userPhoto: "",
         });
 
         queryClient.setQueryData<CapsuleItem[]>(
@@ -366,6 +365,8 @@ export function CreateCapsuleClient() {
         }, 15000);
       } catch (e) {
         console.error(e);
+      } finally {
+        pendingOnchainPhotoRef.current = "";
       }
     })();
 
@@ -557,6 +558,7 @@ export function CreateCapsuleClient() {
         }
 
         const onchainPhoto = await optimizePhotoForOnchain(photoUrl);
+        pendingOnchainPhotoRef.current = onchainPhoto;
         const tokenURI = buildCapsuleTokenUri(trimmed, capsuleTag, onchainPhoto);
 
         await publicClient.simulateContract({
@@ -583,6 +585,7 @@ export function CreateCapsuleClient() {
         setMintError(formatContractCallError(e));
       } finally {
         if (!submittedHash) {
+          pendingOnchainPhotoRef.current = "";
           mintInFlightRef.current = false;
           setTxSubmitting(false);
         }
@@ -922,9 +925,9 @@ export function CreateCapsuleClient() {
               <span className="font-semibold text-cyan-100">
                 Privacy note:
               </span>{" "}
-              photos are resized in your browser to an optimized JPEG and sent
-              as compact on-chain metadata, so opened capsules can be visible to
-              everyone. On-chain metadata is public and permanent.
+              Your photo is converted to on-chain metadata in your browser and
+              never stored on our servers. It is sent only as optimized NFT
+              tokenURI data, so opened capsules can be visible to everyone.
             </div>
           </div>
 

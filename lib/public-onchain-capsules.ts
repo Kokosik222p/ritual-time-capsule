@@ -16,11 +16,9 @@ const CAPSULE_MINTED_EVENT = RITUAL_CAPSULE_ABI.find(
   (item) => item.type === "event" && item.name === "CapsuleMinted",
 );
 
-const DEFAULT_EVENT_LOOKBACK_BLOCKS = BigInt(2_000_000);
 const LOG_CHUNK_SIZE = BigInt(100_000);
 const LOGS_TIMEOUT_MS = 8_000;
 const TOKEN_URI_TIMEOUT_MS = 8_000;
-const MAX_TOKEN_URI_READS = 200;
 
 type MintLog = {
   args: {
@@ -163,19 +161,14 @@ async function loadMintLogsChunked(
   latestBlock: bigint,
 ): Promise<MintLog[]> {
   const deployBlock = deploymentBlockFromEnv();
-  const fromBlock =
-    deployBlock ?? (
-      latestBlock > DEFAULT_EVENT_LOOKBACK_BLOCKS
-        ? latestBlock - DEFAULT_EVENT_LOOKBACK_BLOCKS
-        : BigInt(0)
-    );
+  const fromBlock = deployBlock ?? BigInt(0);
   const safeFromBlock = fromBlock > latestBlock ? latestBlock : fromBlock;
 
   const logs: MintLog[] = [];
   let chunkCount = 0;
   let toBlock = latestBlock;
 
-  while (toBlock >= safeFromBlock && logs.length < MAX_TOKEN_URI_READS) {
+  while (toBlock >= safeFromBlock) {
     const chunkFrom =
       toBlock - safeFromBlock >= LOG_CHUNK_SIZE
         ? toBlock - LOG_CHUNK_SIZE + BigInt(1)
@@ -233,7 +226,7 @@ export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
     return [];
   }
 
-  const newestFirst = [...logs].reverse().slice(0, MAX_TOKEN_URI_READS);
+  const newestFirst = [...logs].reverse();
 
   const capsules = await Promise.all(
     newestFirst.map(async (log): Promise<CapsuleItem | null> => {

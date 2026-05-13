@@ -21,7 +21,9 @@ export function GalleryClient() {
   } = useQuery({
     queryKey: CAPSULE_QUERIES.gallery(),
     queryFn: () => buildGalleryPool(),
-    staleTime: 0,
+    staleTime: 10_000,
+    gcTime: 30 * 60_000,
+    placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchInterval: 25_000,
