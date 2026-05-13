@@ -34,6 +34,7 @@ import {
 import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import { appendMintedCapsule } from "@/lib/minted-capsules-storage";
+import { clearPublicOnchainCapsulesCache } from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import type { Address } from "viem";
 
@@ -305,19 +306,17 @@ export function CreateCapsuleClient() {
           (current = []) => prependUniqueCapsule(current, optimisticCapsule),
         );
 
-        if (unlockAt <= chainNowSec) {
-          queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.gallery(),
-            (current = []) => prependUniqueCapsule(current, optimisticCapsule),
-          );
-          queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-            (current = []) =>
-              prependUniqueCapsule(current, optimisticCapsule).slice(0, 3),
-          );
-        }
+        queryClient.setQueryData<CapsuleItem[]>(
+          CAPSULE_QUERIES.gallery(),
+          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
+        );
+        queryClient.setQueryData<CapsuleItem[]>(
+          CAPSULE_QUERIES.homeRecentlyOpenedRoot,
+          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
+        );
 
         const refreshCapsuleQueries = async () => {
+          clearPublicOnchainCapsulesCache();
           console.debug("[CreateCapsule] refreshing capsule queries", {
             txHash,
             unlockAt,

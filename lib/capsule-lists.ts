@@ -7,7 +7,9 @@ import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import type { CapsuleItem } from "@/lib/capsule-types";
 
 const HOME_LOAD_TIMEOUT_MS = 4_500;
+const GALLERY_LOAD_TIMEOUT_MS = 5_000;
 let lastHomeRecentlyOpened: CapsuleItem[] = [];
+let lastGalleryPool: CapsuleItem[] = [];
 
 function normalizeOptionalUnixTime(value: number | undefined): number | undefined {
   if (value == null || !Number.isFinite(value)) return undefined;
@@ -167,28 +169,35 @@ export async function buildMyCapsulesList(
 
 /** Full gallery pool: public on-chain capsules only. */
 export async function buildGalleryPool(chainNowSec?: number): Promise<CapsuleItem[]> {
-  const capsules = await loadPublicOnchainCapsules();
-  const withPublicContent = dedupeById(capsules.filter(hasPublicContent));
+  const capsules = await withTimeout(
+    loadPublicOnchainCapsules(),
+    GALLERY_LOAD_TIMEOUT_MS,
+    lastGalleryPool,
+  );
+  const pool = sortNewestOpenedFirst(dedupeById(capsules).filter(hasPublicContent));
+  if (pool.length > 0) {
+    lastGalleryPool = pool;
+  }
   const opened =
     chainNowSec != null && Math.floor(chainNowSec) > 0
-      ? filterOpenedAtChainTime(withPublicContent, chainNowSec)
-      : sortNewestOpenedFirst(withPublicContent);
+      ? filterOpenedAtChainTime(pool, chainNowSec)
+      : [];
   console.debug("[GalleryPool] public capsules", {
     count: capsules.length,
-    withPublicContent: withPublicContent.length,
+    withPublicContent: pool.length,
     opened: opened.length,
     chainNowSec: chainNowSec ?? null,
     filter: capsules.map((item) =>
       describeOpenFilter(item, chainNowSec ?? Number.POSITIVE_INFINITY),
     ),
-    items: opened.map((item) => ({
+    items: pool.map((item) => ({
       id: item.id,
       unlockAtUnix: item.unlockAtUnix,
       hasPhoto: Boolean(item.userPhoto),
       messageLength: item.message.length,
     })),
   });
-  return opened;
+  return pool;
 }
 
 /** Only capsules that are open at `chainNowSec`. */
@@ -199,13 +208,6 @@ export function filterOpenedAtChainTime(
   return sortNewestOpenedFirst(
     items.filter((item) => isOpenedAtChainTime(item, chainNowSec)),
   );
-}
-
-function isPlausibleOpened(u: number, now: number): boolean {
-  const unlockAt = normalizeBlockTimestampToSeconds(u);
-  const chainNow = normalizeBlockTimestampToSeconds(now);
-  if (!Number.isFinite(unlockAt) || unlockAt > chainNow) return false;
-  return true;
 }
 
 /**
@@ -222,23 +224,19 @@ export async function buildHomeRecentlyOpenedCapsules(
   const loaded = await withTimeout(
     loadPublicOnchainCapsules(),
     HOME_LOAD_TIMEOUT_MS,
-    lastHomeRecentlyOpened,
+    lastGalleryPool.length > 0 ? lastGalleryPool : lastHomeRecentlyOpened,
   );
   const filterDebug = loaded.map((item) => describeOpenFilter(item, now));
-  const onchainOpened = loaded.filter((c) => {
-    const u = normalizeOptionalUnixTime(c.unlockAtUnix);
-    return u != null && isPlausibleOpened(u, now) && hasPublicContent(c);
-  });
-
-  const combined = sortNewestOpenedFirst(dedupeById(onchainOpened));
+  const pool = sortNewestOpenedFirst(dedupeById(loaded).filter(hasPublicContent));
+  const opened = filterOpenedAtChainTime(pool, now);
 
   console.debug("[HomeRecentlyOpenedBuilder] opened capsules", {
     now,
     loaded: loaded.length,
-    withPublicContent: loaded.filter(hasPublicContent).length,
-    count: combined.length,
+    withPublicContent: pool.length,
+    opened: opened.length,
     filter: filterDebug,
-    items: combined.map((item) => ({
+    items: pool.map((item) => ({
       id: item.id,
       unlockAtUnix: item.unlockAtUnix,
       hasPhoto: Boolean(item.userPhoto),
@@ -246,9 +244,12 @@ export async function buildHomeRecentlyOpenedCapsules(
     })),
   });
 
-  const result = combined.slice(0, limit);
+  if (pool.length > 0) {
+    lastGalleryPool = pool;
+  }
+  const result = opened.slice(0, limit);
   if (result.length > 0) {
     lastHomeRecentlyOpened = result;
   }
-  return result.length > 0 ? result : lastHomeRecentlyOpened.slice(0, limit);
+  return pool.length > 0 ? pool : lastHomeRecentlyOpened.slice(0, limit);
 }

@@ -20,13 +20,13 @@ const LOG_CHUNK_SIZE = BigInt(100_000);
 const LOGS_TIMEOUT_MS = 8_000;
 const TOKEN_URI_TIMEOUT_MS = 8_000;
 const MAX_LOG_CHUNKS_WITHOUT_DEPLOY_BLOCK = 25;
-const MAX_TOKEN_URI_READS_PER_LOAD = 250;
-const PUBLIC_CAPSULE_CACHE_TTL_MS = 5_000;
+const PUBLIC_CAPSULE_CACHE_TTL_MS = 30_000;
 
 let cachedCapsules:
   | { address: Address; loadedAtMs: number; items: CapsuleItem[] }
   | null = null;
 let inFlightCapsules: Promise<CapsuleItem[]> | null = null;
+let cacheGeneration = 0;
 
 type MintLog = {
   args: {
@@ -110,12 +110,14 @@ function decodeTokenUriPayload(tokenURI: string): string | null {
 }
 
 function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | "userPhoto"> {
-  if (!tokenURI.startsWith("data:")) {
+  if (!tokenURI.trim()) {
     return { message: "", tag: "Personal", userPhoto: "" };
   }
 
   try {
-    const json = decodeTokenUriPayload(tokenURI);
+    const json = tokenURI.startsWith("data:")
+      ? decodeTokenUriPayload(tokenURI)
+      : tokenURI;
     if (!json) return { message: "", tag: "Personal", userPhoto: "" };
 
     const parsed = JSON.parse(json) as {
@@ -138,29 +140,78 @@ function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | 
         : "Personal";
     const message =
       typeof parsed.m === "string"
-        ? parsed.m
+        ? parsed.m.trim()
         : typeof parsed.message === "string"
-        ? parsed.message
+        ? parsed.message.trim()
         : typeof parsed.description === "string"
-          ? parsed.description
+          ? parsed.description.trim()
           : typeof parsed.d === "string"
-            ? parsed.d
+            ? parsed.d.trim()
             : "";
     const userPhoto =
       typeof parsed.i === "string"
-        ? parsed.i
+        ? parsed.i.trim()
         : typeof parsed.image === "string"
-        ? parsed.image
+        ? parsed.image.trim()
         : typeof parsed.image_data === "string"
-          ? parsed.image_data
+          ? parsed.image_data.trim()
         : typeof parsed.userPhoto === "string"
-          ? parsed.userPhoto
+          ? parsed.userPhoto.trim()
           : typeof parsed.photo === "string"
-            ? parsed.photo
+            ? parsed.photo.trim()
             : "";
     return { message, tag, userPhoto };
   } catch {
     return { message: "", tag: "Personal", userPhoto: "" };
+  }
+}
+
+export async function loadPublicOnchainCapsuleById(
+  tokenId: bigint,
+): Promise<CapsuleItem | null> {
+  const address = getRitualCapsuleAddress();
+  if (!address) return null;
+
+  try {
+    const tokenURI = await withTimeout(
+      publicClient.readContract({
+        address,
+        abi: RITUAL_CAPSULE_ABI,
+        functionName: "tokenURI",
+        args: [tokenId],
+      }),
+      TOKEN_URI_TIMEOUT_MS,
+    );
+    const metadata = parseTokenUri(tokenURI);
+    const item: CapsuleItem = {
+      id: `onchain-${tokenId.toString()}`,
+      ...metadata,
+    };
+
+    if (cachedCapsules?.address.toLowerCase() === address.toLowerCase()) {
+      const withoutCurrent = cachedCapsules.items.filter(
+        (capsule) => capsule.id !== item.id,
+      );
+      cachedCapsules = {
+        address,
+        loadedAtMs: Date.now(),
+        items: [item, ...withoutCurrent],
+      };
+    }
+
+    console.debug("[PublicOnchainCapsules] direct tokenURI", {
+      id: item.id,
+      hasPhoto: Boolean(item.userPhoto),
+      messageLength: item.message.length,
+    });
+
+    return item;
+  } catch (error) {
+    console.warn("[PublicOnchainCapsules] failed direct tokenURI read", {
+      tokenId: tokenId.toString(),
+      error,
+    });
+    return null;
   }
 }
 
@@ -247,7 +298,7 @@ async function loadPublicOnchainCapsulesFresh(): Promise<CapsuleItem[]> {
     return [];
   }
 
-  const newestFirst = [...logs].reverse().slice(0, MAX_TOKEN_URI_READS_PER_LOAD);
+  const newestFirst = [...logs].reverse();
 
   const capsules = await Promise.all(
     newestFirst.map(async (log): Promise<CapsuleItem | null> => {
@@ -313,18 +364,31 @@ export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
     return inFlightCapsules;
   }
 
+  const generation = cacheGeneration;
   inFlightCapsules = loadPublicOnchainCapsulesFresh().then(
     (items) => {
-      cachedCapsules = { address, loadedAtMs: Date.now(), items };
-      inFlightCapsules = null;
-      return items;
+      if (generation === cacheGeneration && items.length > 0) {
+        cachedCapsules = { address, loadedAtMs: Date.now(), items };
+      }
+      if (generation === cacheGeneration) {
+        inFlightCapsules = null;
+      }
+      return items.length > 0 ? items : (cachedCapsules?.items ?? []);
     },
     (error) => {
-      inFlightCapsules = null;
+      if (generation === cacheGeneration) {
+        inFlightCapsules = null;
+      }
       console.warn("[PublicOnchainCapsules] uncached load failed", error);
       return cachedCapsules?.items ?? [];
     },
   );
 
   return inFlightCapsules;
+}
+
+export function clearPublicOnchainCapsulesCache(): void {
+  cacheGeneration += 1;
+  cachedCapsules = null;
+  inFlightCapsules = null;
 }

@@ -73,6 +73,7 @@ export function CapsuleCard({
   hideShare = false,
   variant = "default",
   className = "",
+  onOpen,
 }: {
   item: CapsuleItem;
   forceOpened?: boolean;
@@ -80,29 +81,35 @@ export function CapsuleCard({
   /** `spotlight` — premium Home row: taller photo, gradient shell, time-only footer. */
   variant?: "default" | "spotlight";
   className?: string;
+  onOpen?: () => void;
 }) {
   const spotlight = variant === "spotlight";
   const { nowSec, ready } = useChainTime();
   const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">(
     "",
   );
+  const [localNowSec, setLocalNowSec] = useState(() =>
+    Math.floor(Date.now() / 1000),
+  );
   const photoSrc = item.userPhoto || "";
 
-  const fallbackNow = Math.floor(Date.now() / 1000);
-  const chainNow =
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setLocalNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const chainNowFromProvider =
     ready && Number.isFinite(nowSec) && nowSec > 0
       ? normalizeBlockTimestampToSeconds(nowSec)
-      : fallbackNow;
+      : 0;
+  const chainNow = Math.max(chainNowFromProvider, localNowSec);
   const unlockRaw = normalizeOptionalUnixTime(item.unlockAtUnix);
-  const unlockForSealed = unlockRaw ?? Number.MAX_SAFE_INTEGER;
   const hasUnlockTime = unlockRaw != null;
   const hasTimePassed = hasUnlockTime && unlockRaw <= chainNow;
-  const isSealed =
-    !forceOpened &&
-    chainNow > 0 &&
-    hasUnlockTime &&
-    unlockForSealed > chainNow;
-  const isOpenedVisual = forceOpened || hasTimePassed || !isSealed;
+  const isOpenedVisual = forceOpened || hasTimePassed;
+  const isSealed = !isOpenedVisual;
 
   useEffect(() => {
     console.debug("[CapsuleCard] open state", {
@@ -128,6 +135,7 @@ export function CapsuleCard({
     item.id,
     item.message.length,
     item.owner,
+    localNowSec,
     nowSec,
     photoSrc,
     ready,
@@ -144,7 +152,7 @@ export function CapsuleCard({
       return formatOpenedAgo(openedAt, chainNow);
     }
     if (isSealed) {
-      return formatSealedUntil(unlockForSealed);
+      return formatSealedUntil(unlockRaw ?? chainNow);
     }
     const u = unlockRaw ?? 0;
     const openedAt = u > 0 ? Math.min(Math.floor(u), chainNow) : chainNow;
@@ -157,7 +165,17 @@ export function CapsuleCard({
 
   return (
     <div
-      className={`group relative flex h-full ${CARD_MIN_H} flex-col overflow-hidden ${cardBase} transition-colors ${spotlight ? "hover:border-white/[0.14]" : "hover:border-white/18"} ${className}`}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (!onOpen) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className={`group relative flex h-full ${CARD_MIN_H} flex-col overflow-hidden ${cardBase} transition-colors ${onOpen ? "cursor-pointer" : ""} ${spotlight ? "hover:border-white/[0.14]" : "hover:border-white/18"} ${className}`}
     >
       <div className="flex min-h-0 flex-1 flex-col">
         {isSealed ? (
@@ -223,7 +241,8 @@ export function CapsuleCard({
         {isOpenedVisual && !hideShare ? (
           <button
             type="button"
-            onClick={async () => {
+            onClick={async (event) => {
+              event.stopPropagation();
               try {
                 const url = `${window.location.origin}/gallery#capsule-${item.id}`;
                 await navigator.clipboard.writeText(url);

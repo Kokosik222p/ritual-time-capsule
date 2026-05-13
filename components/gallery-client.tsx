@@ -1,8 +1,9 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CapsuleCard } from "@/components/CapsuleCard";
+import { CapsuleFullViewModal } from "@/components/CapsuleFullViewModal";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
 import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
@@ -10,11 +11,42 @@ import {
   buildGalleryPool,
   filterOpenedAtChainTime,
 } from "@/lib/capsule-lists";
+import {
+  loadPublicOnchainCapsuleById,
+} from "@/lib/public-onchain-capsules";
+import type { CapsuleItem } from "@/lib/capsule-types";
+
+const GALLERY_PAGE_SIZE = 12;
+
+function parseCapsuleHash(hash: string): string | null {
+  const normalized = decodeURIComponent(hash.trim());
+  if (!normalized.startsWith("#capsule-")) return null;
+
+  const rawId = normalized.slice("#capsule-".length).trim();
+  if (!rawId) return null;
+  if (/^\d+$/.test(rawId)) return `onchain-${rawId}`;
+  return rawId;
+}
+
+function tokenIdFromCapsuleId(id: string | null): bigint | null {
+  if (!id) return null;
+  const raw = id.startsWith("onchain-") ? id.slice("onchain-".length) : id;
+  if (!/^\d+$/.test(raw)) return null;
+  return BigInt(raw);
+}
 
 export function GalleryClient() {
   const { nowSec, ready } = useChainTime();
-  const hasChainNow = ready && nowSec > 0;
+  const [localNowSec, setLocalNowSec] = useState(() =>
+    Math.floor(Date.now() / 1000),
+  );
+  const chainNowSec = ready && nowSec > 0 ? nowSec : 0;
+  const effectiveNowSec = Math.max(chainNowSec, localNowSec);
   const queryClient = useQueryClient();
+  const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [directItem, setDirectItem] = useState<CapsuleItem | null>(null);
+  const [directLoading, setDirectLoading] = useState(false);
 
   const {
     data: pool,
@@ -22,9 +54,8 @@ export function GalleryClient() {
     isPending,
   } = useQuery({
     queryKey: CAPSULE_QUERIES.gallery(),
-    queryFn: () => buildGalleryPool(nowSec),
-    enabled: hasChainNow,
-    staleTime: 2_000,
+    queryFn: () => buildGalleryPool(effectiveNowSec),
+    staleTime: 15_000,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
@@ -33,46 +64,119 @@ export function GalleryClient() {
   });
 
   const openedItems = useMemo(() => {
-    if (!hasChainNow || !pool) return [];
-    return filterOpenedAtChainTime(pool, nowSec);
-  }, [pool, nowSec, hasChainNow]);
+    if (!pool) return [];
+    return filterOpenedAtChainTime(pool, effectiveNowSec);
+  }, [pool, effectiveNowSec]);
+  const visibleItems = openedItems.slice(0, visibleCount);
+  const selectedItem = selectedId
+    ? openedItems.find((item) => item.id === selectedId) ?? directItem
+    : null;
+  const hasMore = visibleCount < openedItems.length;
 
   useEffect(() => {
-    if (!hasChainNow) return;
-    void queryClient.refetchQueries({
-      queryKey: CAPSULE_QUERIES.gallery(),
-      type: "active",
-    });
-  }, [hasChainNow, nowSec, queryClient]);
+    const id = window.setInterval(() => {
+      setLocalNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const openCapsule = useCallback((id: string) => {
+    setSelectedId(id);
+    setDirectItem(null);
+    const nextUrl = `${window.location.pathname}${window.location.search}#capsule-${id}`;
+    window.history.replaceState(null, "", nextUrl);
+  }, []);
+
+  const closeCapsule = useCallback(() => {
+    setSelectedId(null);
+    setDirectItem(null);
+    setDirectLoading(false);
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+  }, []);
 
   useEffect(() => {
-    if (!hasChainNow) return;
-    void queryClient.refetchQueries({
-      queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-      type: "active",
-    });
-    void queryClient.refetchQueries({
-      queryKey: CAPSULE_QUERIES.root,
-      type: "active",
-    });
-  }, [hasChainNow, nowSec, queryClient]);
+    const syncFromHash = () => {
+      const id = parseCapsuleHash(window.location.hash);
+      if (!id) return;
+      setSelectedId(id);
+      setDirectItem(null);
+      void queryClient.invalidateQueries({
+        queryKey: CAPSULE_QUERIES.root,
+        refetchType: "all",
+      });
+      void queryClient.refetchQueries({
+        queryKey: CAPSULE_QUERIES.root,
+        type: "active",
+      });
+    };
+
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, [queryClient]);
 
   useEffect(() => {
-    if (!hasChainNow || pool === undefined) return;
+    if (!selectedId) return;
+    if (openedItems.some((item) => item.id === selectedId)) return;
+
+    const tokenId = tokenIdFromCapsuleId(selectedId);
+    if (tokenId == null) return;
+
+    let cancelled = false;
+    setDirectLoading(true);
+    loadPublicOnchainCapsuleById(tokenId)
+      .then((item) => {
+        if (cancelled) return;
+        setDirectItem(item);
+        if (item) {
+          queryClient.setQueryData<CapsuleItem[]>(
+            CAPSULE_QUERIES.gallery(),
+            (current = []) => [
+              item,
+              ...current.filter((capsule) => capsule.id !== item.id),
+            ],
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDirectLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [openedItems, queryClient, selectedId]);
+
+  useEffect(() => {
+    if (pool === undefined) return;
     console.debug("[GalleryClient] loaded", {
-      nowSec,
+      nowSec: effectiveNowSec,
+      chainReady: ready,
       total: pool.length,
       opened: openedItems.length,
+      visible: visibleItems.length,
       error,
       items: pool.map((item) => ({
         id: item.id,
         unlockAtUnix: item.unlockAtUnix,
-        isOpened: item.unlockAtUnix != null && item.unlockAtUnix <= nowSec,
+        isOpened:
+          item.unlockAtUnix != null && item.unlockAtUnix <= effectiveNowSec,
         hasPhoto: Boolean(item.userPhoto),
         messageLength: item.message.length,
       })),
     });
-  }, [error, nowSec, openedItems.length, pool, hasChainNow]);
+  }, [
+    effectiveNowSec,
+    error,
+    openedItems.length,
+    pool,
+    ready,
+    visibleItems.length,
+  ]);
 
   if (isPending && pool === undefined) {
     return (
@@ -92,34 +196,50 @@ export function GalleryClient() {
     );
   }
 
-  if (!hasChainNow) {
-    return (
-      <p className="text-sm text-zinc-500">Syncing chain time for gallery…</p>
-    );
-  }
-
   if (openedItems.length === 0) {
     return (
-      <p className="text-sm text-zinc-500">
-        No opened capsules yet. Check back after unlock times pass on-chain.
-      </p>
+      <>
+        <CapsuleFullViewModal
+          item={directLoading ? directItem : selectedItem}
+          onClose={closeCapsule}
+        />
+      </>
     );
   }
 
   return (
-    <div className="ritual-card-grid lg:grid-cols-4">
-      {openedItems.map((item) => (
-        <CapsuleGridSlot
-          key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
-          scrollId={`capsule-${item.id}`}
-        >
-          <CapsuleCard
-            item={item}
-            forceOpened
-            className="h-full min-h-0 flex-1 border-transparent bg-black/75"
-          />
-        </CapsuleGridSlot>
-      ))}
-    </div>
+    <>
+      <div className="ritual-card-grid lg:grid-cols-4">
+        {visibleItems.map((item) => (
+          <CapsuleGridSlot
+            key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
+            scrollId={`capsule-${item.id}`}
+          >
+            <CapsuleCard
+              item={item}
+              forceOpened
+              onOpen={() => openCapsule(item.id)}
+              className="h-full min-h-0 flex-1 border-transparent bg-black/75"
+            />
+          </CapsuleGridSlot>
+        ))}
+      </div>
+
+      {hasMore ? (
+        <div className="mt-10 flex justify-center">
+          <button
+            type="button"
+            onClick={() =>
+              setVisibleCount((current) => current + GALLERY_PAGE_SIZE)
+            }
+            className="rounded-full border border-white/12 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-cyan-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/[0.08]"
+          >
+            Load more
+          </button>
+        </div>
+      ) : null}
+
+      <CapsuleFullViewModal item={selectedItem} onClose={closeCapsule} />
+    </>
   );
 }
