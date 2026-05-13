@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
@@ -103,6 +103,36 @@ export function CapsuleCard({
     hasUnlockTime &&
     unlockForSealed > chainNow;
   const isOpenedVisual = forceOpened || hasTimePassed || !isSealed;
+
+  useEffect(() => {
+    console.debug("[CapsuleCard] open state", {
+      id: item.id,
+      owner: item.owner,
+      nowSec,
+      ready,
+      chainNow,
+      unlockAtUnix: unlockRaw,
+      forceOpened,
+      hasTimePassed,
+      isSealed,
+      isOpenedVisual,
+      hasPhoto: Boolean(photoSrc),
+      messageLength: item.message.length,
+    });
+  }, [
+    chainNow,
+    forceOpened,
+    hasTimePassed,
+    isOpenedVisual,
+    isSealed,
+    item.id,
+    item.message.length,
+    item.owner,
+    nowSec,
+    photoSrc,
+    ready,
+    unlockRaw,
+  ]);
 
   const timeLabel = (() => {
     if (forceOpened) {

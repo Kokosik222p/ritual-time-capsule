@@ -19,6 +19,14 @@ const CAPSULE_MINTED_EVENT = RITUAL_CAPSULE_ABI.find(
 const LOG_CHUNK_SIZE = BigInt(100_000);
 const LOGS_TIMEOUT_MS = 8_000;
 const TOKEN_URI_TIMEOUT_MS = 8_000;
+const MAX_LOG_CHUNKS_WITHOUT_DEPLOY_BLOCK = 25;
+const MAX_TOKEN_URI_READS_PER_LOAD = 250;
+const PUBLIC_CAPSULE_CACHE_TTL_MS = 5_000;
+
+let cachedCapsules:
+  | { address: Address; loadedAtMs: number; items: CapsuleItem[] }
+  | null = null;
+let inFlightCapsules: Promise<CapsuleItem[]> | null = null;
 
 type MintLog = {
   args: {
@@ -161,12 +169,17 @@ async function loadMintLogsChunked(
   latestBlock: bigint,
 ): Promise<MintLog[]> {
   const deployBlock = deploymentBlockFromEnv();
-  const fromBlock = deployBlock ?? BigInt(0);
+  const fromBlock =
+    deployBlock ??
+    (latestBlock > LOG_CHUNK_SIZE * BigInt(MAX_LOG_CHUNKS_WITHOUT_DEPLOY_BLOCK)
+      ? latestBlock - LOG_CHUNK_SIZE * BigInt(MAX_LOG_CHUNKS_WITHOUT_DEPLOY_BLOCK)
+      : BigInt(0));
   const safeFromBlock = fromBlock > latestBlock ? latestBlock : fromBlock;
 
   const logs: MintLog[] = [];
   let chunkCount = 0;
   let toBlock = latestBlock;
+  let stoppedByChunkLimit = false;
 
   while (toBlock >= safeFromBlock) {
     const chunkFrom =
@@ -195,6 +208,10 @@ async function loadMintLogsChunked(
 
     chunkCount += 1;
     if (chunkFrom === safeFromBlock) break;
+    if (!deployBlock && chunkCount >= MAX_LOG_CHUNKS_WITHOUT_DEPLOY_BLOCK) {
+      stoppedByChunkLimit = true;
+      break;
+    }
     toBlock = chunkFrom - BigInt(1);
   }
 
@@ -205,12 +222,16 @@ async function loadMintLogsChunked(
     chunkCount,
     count: logs.length,
     deployBlock: deployBlock?.toString() ?? null,
+    stoppedByChunkLimit,
+    note: deployBlock
+      ? "Loaded from configured deploy block."
+      : "Set NEXT_PUBLIC_RITUAL_CAPSULE_DEPLOY_BLOCK to scan full contract history.",
   });
 
   return logs;
 }
 
-export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
+async function loadPublicOnchainCapsulesFresh(): Promise<CapsuleItem[]> {
   const address = getRitualCapsuleAddress();
   if (!address) return [];
 
@@ -226,7 +247,7 @@ export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
     return [];
   }
 
-  const newestFirst = [...logs].reverse();
+  const newestFirst = [...logs].reverse().slice(0, MAX_TOKEN_URI_READS_PER_LOAD);
 
   const capsules = await Promise.all(
     newestFirst.map(async (log): Promise<CapsuleItem | null> => {
@@ -273,4 +294,37 @@ export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
     })),
   });
   return parsed;
+}
+
+export async function loadPublicOnchainCapsules(): Promise<CapsuleItem[]> {
+  const address = getRitualCapsuleAddress();
+  if (!address) return [];
+
+  const now = Date.now();
+  if (
+    cachedCapsules &&
+    cachedCapsules.address.toLowerCase() === address.toLowerCase() &&
+    now - cachedCapsules.loadedAtMs <= PUBLIC_CAPSULE_CACHE_TTL_MS
+  ) {
+    return cachedCapsules.items;
+  }
+
+  if (inFlightCapsules) {
+    return inFlightCapsules;
+  }
+
+  inFlightCapsules = loadPublicOnchainCapsulesFresh().then(
+    (items) => {
+      cachedCapsules = { address, loadedAtMs: Date.now(), items };
+      inFlightCapsules = null;
+      return items;
+    },
+    (error) => {
+      inFlightCapsules = null;
+      console.warn("[PublicOnchainCapsules] uncached load failed", error);
+      return cachedCapsules?.items ?? [];
+    },
+  );
+
+  return inFlightCapsules;
 }

@@ -311,7 +311,7 @@ export function CreateCapsuleClient() {
             (current = []) => prependUniqueCapsule(current, optimisticCapsule),
           );
           queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.homeRecentlyOpened(chainNowSec),
+            CAPSULE_QUERIES.homeRecentlyOpenedRoot,
             (current = []) =>
               prependUniqueCapsule(current, optimisticCapsule).slice(0, 3),
           );
@@ -549,7 +549,7 @@ export function CreateCapsuleClient() {
           if (mintedToday >= dailyLimit) {
             pendingUnlockSentRef.current = null;
             setMintError(
-              `Ви вже використали денний ліміт: ${dailyLimit.toString()} капсули на цей гаманець за добу. Спробуйте знову завтра.`,
+              "Daily mint limit reached (3 capsules per day). Limit resets tomorrow.",
             );
             return;
           }

@@ -16,8 +16,8 @@ export function HomeRecentlyOpened() {
   const hasChainNow = ready && nowSec > 0;
   const queryClient = useQueryClient();
 
-  const { data, isPending } = useQuery({
-    queryKey: CAPSULE_QUERIES.homeRecentlyOpened(nowSec),
+  const { data, error, isPending } = useQuery({
+    queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
     queryFn: () => buildHomeRecentlyOpenedCapsules(nowSec, HOME_OPEN_COUNT),
     enabled: hasChainNow,
     staleTime: 2_000,
@@ -29,13 +29,15 @@ export function HomeRecentlyOpened() {
   });
 
   const items = data ?? [];
-  const showSkeleton = !hasChainNow || (isPending && data === undefined);
+  const showSkeleton =
+    !hasChainNow || (items.length === 0 && (isPending || data === undefined));
 
   useEffect(() => {
     if (!hasChainNow || data === undefined) return;
     console.debug("[RecentlyOpened] fetched", {
       nowSec,
       count: data.length,
+      error,
       items: data.map((item) => ({
         id: item.id,
         unlockAtUnix: item.unlockAtUnix,
@@ -43,7 +45,7 @@ export function HomeRecentlyOpened() {
         messageLength: item.message.length,
       })),
     });
-  }, [data, hasChainNow, nowSec]);
+  }, [data, error, hasChainNow, nowSec]);
 
   useEffect(() => {
     if (!hasChainNow) return;
@@ -70,8 +72,7 @@ export function HomeRecentlyOpened() {
             Recently Opened Capsules
           </h2>
           <p className="text-[0.9375rem] leading-relaxed text-zinc-500 md:text-base">
-            Live Ritual chain time — your mints and community opens. Only
-            unlocked capsules; no sealed artwork.
+            Latest opened capsules from the community.
           </p>
         </div>
         <Link
@@ -109,13 +110,6 @@ export function HomeRecentlyOpened() {
               </CapsuleGridSlot>
             ))}
       </div>
-
-      {!showSkeleton && items.length === 0 ? (
-        <p className="mt-10 text-center text-sm text-zinc-500">
-          No opened capsules to show yet. Mint one or check back after unlock
-          times.
-        </p>
-      ) : null}
     </section>
   );
 }
