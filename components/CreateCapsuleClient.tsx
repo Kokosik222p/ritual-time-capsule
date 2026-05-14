@@ -33,6 +33,7 @@ import {
 } from "@/lib/wallet-connection";
 import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
+import { dedupeCapsules } from "@/lib/capsule-lists";
 import { appendMintedCapsule } from "@/lib/minted-capsules-storage";
 import { clearPublicOnchainCapsulesCache } from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
@@ -269,6 +270,11 @@ export function CreateCapsuleClient() {
           userPhoto: onchainPhoto,
         };
 
+        queryClient.setQueryData<CapsuleItem[]>(
+          CAPSULE_QUERIES.user(address),
+          (current = []) => dedupeCapsules([optimisticCapsule, ...current]),
+        );
+
         appendMintedCapsule({
           id: optimisticCapsule.id,
           owner,
@@ -320,6 +326,15 @@ export function CreateCapsuleClient() {
               type: "all",
             }),
           ]);
+
+          queryClient.setQueryData<CapsuleItem[]>(
+            CAPSULE_QUERIES.user(address),
+            (current = []) => dedupeCapsules(current),
+          );
+          queryClient.setQueryData<CapsuleItem[]>(
+            CAPSULE_QUERIES.gallery(),
+            (current = []) => dedupeCapsules(current),
+          );
         };
 
         await refreshCapsuleQueries();

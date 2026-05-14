@@ -7,7 +7,7 @@ import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
 import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
-import { buildMyCapsulesList } from "@/lib/capsule-lists";
+import { buildMyCapsulesList, dedupeCapsules } from "@/lib/capsule-lists";
 
 export function MyCapsulesClient() {
   const { address, isConnected } = useAccount();
@@ -23,6 +23,7 @@ export function MyCapsulesClient() {
   const { data, isPending } = useQuery({
     queryKey: CAPSULE_QUERIES.user(address),
     queryFn: () => buildMyCapsulesList(address),
+    select: (rows) => dedupeCapsules(rows ?? []),
     enabled: walletReady,
     staleTime: 2_000,
     gcTime: 30 * 60_000,

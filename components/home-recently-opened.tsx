@@ -10,7 +10,7 @@ import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import {
   buildHomeRecentlyOpenedCapsules,
-  capsuleCompositeKey,
+  capsuleDedupeKey,
   dedupeCapsules,
   filterOpenedAtChainTime,
 } from "@/lib/capsule-lists";
@@ -32,6 +32,7 @@ export function HomeRecentlyOpened() {
     queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
     queryFn: () =>
       buildHomeRecentlyOpenedCapsules(effectiveNowSec, HOME_OPEN_COUNT),
+    select: (rows) => dedupeCapsules(rows ?? []),
     staleTime: 0,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
@@ -42,7 +43,7 @@ export function HomeRecentlyOpened() {
   });
 
   const items = useMemo(() => {
-    const list = dedupeCapsules(data ?? []);
+    const list = data ?? [];
     return filterOpenedAtChainTime(list, effectiveNowSec).slice(
       0,
       HOME_OPEN_COUNT,
@@ -114,7 +115,7 @@ export function HomeRecentlyOpened() {
               </CapsuleGridSlot>
             ))
           : items.map((item) => (
-              <CapsuleGridSlot key={capsuleCompositeKey(item)}>
+              <CapsuleGridSlot key={capsuleDedupeKey(item)}>
                 <CapsuleCard
                   item={item}
                   variant="spotlight"

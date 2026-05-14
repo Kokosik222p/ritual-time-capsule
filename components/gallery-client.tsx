@@ -9,7 +9,7 @@ import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import {
   buildGalleryPool,
-  capsuleCompositeKey,
+  capsuleDedupeKey,
   dedupeCapsules,
   filterOpenedAtChainTime,
 } from "@/lib/capsule-lists";
@@ -52,6 +52,7 @@ export function GalleryClient() {
   const { data: pool, isPending } = useQuery<CapsuleItem[]>({
     queryKey: CAPSULE_QUERIES.gallery(),
     queryFn: buildGalleryPool,
+    select: (data) => dedupeCapsules(data ?? []),
     staleTime: 0,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
@@ -182,7 +183,7 @@ export function GalleryClient() {
     <>
       <div className="ritual-card-grid lg:grid-cols-4">
         {visibleItems.map((item) => (
-          <CapsuleGridSlot key={capsuleCompositeKey(item)} scrollId={`capsule-${item.id}`}>
+          <CapsuleGridSlot key={capsuleDedupeKey(item)} scrollId={`capsule-${item.id}`}>
             <CapsuleCard
               item={item}
               forceOpened
