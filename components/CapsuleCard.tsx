@@ -96,7 +96,7 @@ export function CapsuleCard({
   useEffect(() => {
     const id = window.setInterval(() => {
       setLocalNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
+    }, 250);
     return () => window.clearInterval(id);
   }, []);
 
@@ -106,41 +106,20 @@ export function CapsuleCard({
       : 0;
   const chainNow = Math.max(chainNowFromProvider, localNowSec);
   const unlockRaw = normalizeOptionalUnixTime(item.unlockAtUnix);
-  const hasUnlockTime = unlockRaw != null;
-  const hasTimePassed = hasUnlockTime && unlockRaw <= chainNow;
-  const isOpenedVisual = forceOpened || hasTimePassed;
-  const isSealed = !isOpenedVisual;
 
-  useEffect(() => {
-    console.debug("[CapsuleCard] open state", {
-      id: item.id,
-      owner: item.owner,
-      nowSec,
-      ready,
-      chainNow,
-      unlockAtUnix: unlockRaw,
-      forceOpened,
-      hasTimePassed,
-      isSealed,
-      isOpenedVisual,
-      hasPhoto: Boolean(photoSrc),
-      messageLength: item.message.length,
-    });
-  }, [
-    chainNow,
-    forceOpened,
-    hasTimePassed,
-    isOpenedVisual,
-    isSealed,
-    item.id,
-    item.message.length,
-    item.owner,
-    localNowSec,
-    nowSec,
-    photoSrc,
-    ready,
-    unlockRaw,
-  ]);
+  // Opened vs sealed: chain time only (local clock keeps UI in sync between RPC polls).
+  let isOpenedVisual: boolean;
+  let isSealed: boolean;
+  if (forceOpened) {
+    isOpenedVisual = true;
+    isSealed = false;
+  } else if (unlockRaw == null) {
+    isOpenedVisual = false;
+    isSealed = true;
+  } else {
+    isOpenedVisual = unlockRaw <= chainNow;
+    isSealed = !isOpenedVisual;
+  }
 
   const timeLabel = (() => {
     if (forceOpened) {

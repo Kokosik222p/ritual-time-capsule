@@ -6,10 +6,7 @@ import { loadPublicOnchainCapsules } from "@/lib/public-onchain-capsules";
 import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import type { CapsuleItem } from "@/lib/capsule-types";
 
-const HOME_LOAD_TIMEOUT_MS = 4_500;
-const GALLERY_LOAD_TIMEOUT_MS = 5_000;
-let lastHomeRecentlyOpened: CapsuleItem[] = [];
-let lastGalleryPool: CapsuleItem[] = [];
+const LOAD_TIMEOUT_MS = 12_000;
 
 function normalizeOptionalUnixTime(value: number | undefined): number | undefined {
   if (value == null || !Number.isFinite(value)) return undefined;
@@ -26,128 +23,131 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
       },
       (error) => {
         globalThis.clearTimeout(timer);
-        console.warn("[CapsuleLists] timed load failed", error);
+        console.warn("[CapsuleLists] load timeout or error", error);
         resolve(fallback);
       },
     );
   });
 }
 
-function dedupeKey(item: CapsuleItem): string {
-  return [
-    item.id,
-    item.owner?.toLowerCase() ?? "",
-    normalizeOptionalUnixTime(item.unlockAtUnix)?.toString() ?? "",
-    item.message.trim(),
-    item.tag,
-  ].join("|");
-}
-
-function canonicalCapsuleKey(item: CapsuleItem): string {
-  return [
-    item.owner?.toLowerCase() ?? "",
-    normalizeOptionalUnixTime(item.unlockAtUnix)?.toString() ?? "",
-    item.message.trim(),
-    item.tag,
-  ].join("|");
-}
-
-function itemScore(item: CapsuleItem): number {
-  return (
-    (item.id.startsWith("onchain-") ? 8 : 0) +
-    (item.userPhoto.trim().length > 0 ? 4 : 0) +
-    (item.message.trim().length > 0 ? 2 : 0) +
-    (item.owner ? 1 : 0)
+function sortByUnlockNewestFirst(items: CapsuleItem[]): CapsuleItem[] {
+  return [...items].sort(
+    (a, b) =>
+      (normalizeOptionalUnixTime(b.unlockAtUnix) ?? 0) -
+      (normalizeOptionalUnixTime(a.unlockAtUnix) ?? 0),
   );
 }
 
-function dedupeById(preferred: CapsuleItem[], rest: CapsuleItem[] = []): CapsuleItem[] {
-  const slots = new Map<string, CapsuleItem>();
-  const order: string[] = [];
-
-  for (const item of [...preferred, ...rest]) {
-    const keys = [
-      `id:${item.id}`,
-      `strict:${dedupeKey(item)}`,
-      item.owner && item.unlockAtUnix != null
-        ? `canonical:${canonicalCapsuleKey(item)}`
-        : "",
-    ].filter(Boolean);
-    const existingKey = keys.find((key) => slots.has(key));
-
-    if (!existingKey) {
-      const primaryKey = keys[0];
-      slots.set(primaryKey, item);
-      for (const key of keys.slice(1)) {
-        slots.set(key, item);
-      }
-      order.push(primaryKey);
-      continue;
-    }
-
-    const existing = slots.get(existingKey);
-    if (!existing || itemScore(item) <= itemScore(existing)) continue;
-
-    for (const [key, value] of slots.entries()) {
-      if (value === existing) {
-        slots.set(key, item);
-      }
-    }
-    for (const key of keys) {
-      slots.set(key, item);
-    }
-  }
-
-  const seen = new Set<CapsuleItem>();
-  return order
-    .map((key) => slots.get(key))
-    .filter((item): item is CapsuleItem => {
-      if (!item || seen.has(item)) return false;
-      seen.add(item);
-      return true;
-    });
+/** Unique row identity: id + owner + unlock (all normalized). */
+export function capsuleCompositeKey(item: CapsuleItem): string {
+  const owner = item.owner?.toLowerCase() ?? "";
+  const u = normalizeOptionalUnixTime(item.unlockAtUnix);
+  const unlockPart =
+    u != null && Number.isFinite(u) ? String(Math.floor(u)) : "na";
+  return `${item.id}|${owner}|${unlockPart}`;
 }
 
-function hasPublicContent(item: CapsuleItem): boolean {
-  return item.message.trim().length > 0 || item.userPhoto.trim().length > 0;
+function ownerUnlockKey(item: CapsuleItem): string {
+  const owner = item.owner?.toLowerCase() ?? "";
+  const u = normalizeOptionalUnixTime(item.unlockAtUnix);
+  return `${owner}|${u != null && Number.isFinite(u) ? String(Math.floor(u)) : "na"}`;
+}
+
+function richnessScore(item: CapsuleItem): number {
+  return item.message.trim().length + item.userPhoto.trim().length;
+}
+
+function isOnchainId(id: string): boolean {
+  return /^onchain-\d+$/.test(id);
+}
+
+/**
+ * One canonical list: no duplicate rows.
+ *
+ * 1) Same composite key `(id + owner + unlockAtUnix)` → keep the richest row
+ *    (more message/photo), breaking ties toward `onchain-*` ids.
+ * 2) Same `(owner + unlock)` but different ids (e.g. optimistic `0x…` tx id vs
+ *    real `onchain-N`) → keep a single row, always prefer `onchain-*` when present.
+ */
+export function dedupeCapsules(items: CapsuleItem[]): CapsuleItem[] {
+  const sorted = sortByUnlockNewestFirst([...items]);
+  const byComposite = new Map<string, CapsuleItem>();
+
+  for (const item of sorted) {
+    const key = capsuleCompositeKey(item);
+    const existing = byComposite.get(key);
+    if (!existing) {
+      byComposite.set(key, item);
+      continue;
+    }
+    const pick =
+      tieBreakDuplicate(existing, item) >= 0 ? existing : item;
+    byComposite.set(key, pick);
+  }
+
+  const afterComposite = [...byComposite.values()];
+  const groups = new Map<string, CapsuleItem[]>();
+  for (const item of afterComposite) {
+    const k = ownerUnlockKey(item);
+    const g = groups.get(k) ?? [];
+    g.push(item);
+    groups.set(k, g);
+  }
+
+  const merged: CapsuleItem[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      merged.push(group[0]!);
+      continue;
+    }
+    const onchains = group.filter((i) => isOnchainId(i.id));
+    if (onchains.length === 1) {
+      merged.push(onchains[0]!);
+      continue;
+    }
+    if (onchains.length > 1) {
+      const seen = new Set<string>();
+      for (const o of onchains) {
+        if (!seen.has(o.id)) {
+          seen.add(o.id);
+          merged.push(o);
+        }
+      }
+      continue;
+    }
+    const best = group.reduce((a, b) =>
+      tieBreakDuplicate(a, b) >= 0 ? a : b,
+    );
+    merged.push(best);
+  }
+
+  return sortByUnlockNewestFirst(merged);
+}
+
+/** >= 0 means `a` wins over `b`. */
+function tieBreakDuplicate(a: CapsuleItem, b: CapsuleItem): number {
+  const ra = richnessScore(a);
+  const rb = richnessScore(b);
+  if (ra !== rb) return ra - rb;
+  const aOn = isOnchainId(a.id) ? 1 : 0;
+  const bOn = isOnchainId(b.id) ? 1 : 0;
+  if (aOn !== bOn) return aOn - bOn;
+  return a.id.localeCompare(b.id);
+}
+
+async function loadOnchainCapsulesDeduped(): Promise<CapsuleItem[]> {
+  const raw = await withTimeout(
+    loadPublicOnchainCapsules(),
+    LOAD_TIMEOUT_MS,
+    [],
+  );
+  return dedupeCapsules(raw);
 }
 
 function isOpenedAtChainTime(item: CapsuleItem, chainNowSec: number): boolean {
   const now = normalizeBlockTimestampToSeconds(chainNowSec);
   const unlockAt = normalizeOptionalUnixTime(item.unlockAtUnix);
   return unlockAt != null && unlockAt <= now;
-}
-
-function describeOpenFilter(item: CapsuleItem, chainNowSec: number) {
-  const now = normalizeBlockTimestampToSeconds(chainNowSec);
-  const unlockAt = normalizeOptionalUnixTime(item.unlockAtUnix);
-  const hasContent = hasPublicContent(item);
-  return {
-    id: item.id,
-    owner: item.owner,
-    unlockAtUnix: unlockAt,
-    now,
-    isOpened: unlockAt != null && unlockAt <= now,
-    hasContent,
-    hasPhoto: Boolean(item.userPhoto),
-    messageLength: item.message.length,
-    reason:
-      unlockAt == null
-        ? "missing-unlock"
-        : unlockAt > now
-          ? "future-unlock"
-          : !hasContent
-            ? "missing-public-content"
-            : "included",
-  };
-}
-
-function sortNewestOpenedFirst(items: CapsuleItem[]): CapsuleItem[] {
-  return [...items].sort(
-    (a, b) =>
-      (normalizeOptionalUnixTime(b.unlockAtUnix) ?? 0) -
-      (normalizeOptionalUnixTime(a.unlockAtUnix) ?? 0),
-  );
 }
 
 /** My Capsules: only capsules owned by the connected wallet. */
@@ -164,92 +164,31 @@ export async function buildMyCapsulesList(
     .filter((m) => m.owner === owner)
     .map(storedToCapsuleItem);
 
-  return dedupeById(onchain, minted);
+  return dedupeCapsules([...onchain, ...minted]);
 }
 
-/** Full gallery pool: public on-chain capsules only. */
-export async function buildGalleryPool(chainNowSec?: number): Promise<CapsuleItem[]> {
-  const capsules = await withTimeout(
-    loadPublicOnchainCapsules(),
-    GALLERY_LOAD_TIMEOUT_MS,
-    lastGalleryPool,
-  );
-  const pool = sortNewestOpenedFirst(dedupeById(capsules).filter(hasPublicContent));
-  if (pool.length > 0) {
-    lastGalleryPool = pool;
-  }
-  const opened =
-    chainNowSec != null && Math.floor(chainNowSec) > 0
-      ? filterOpenedAtChainTime(pool, chainNowSec)
-      : [];
-  console.debug("[GalleryPool] public capsules", {
-    count: capsules.length,
-    withPublicContent: pool.length,
-    opened: opened.length,
-    chainNowSec: chainNowSec ?? null,
-    filter: capsules.map((item) =>
-      describeOpenFilter(item, chainNowSec ?? Number.POSITIVE_INFINITY),
-    ),
-    items: pool.map((item) => ({
-      id: item.id,
-      unlockAtUnix: item.unlockAtUnix,
-      hasPhoto: Boolean(item.userPhoto),
-      messageLength: item.message.length,
-    })),
-  });
-  return pool;
+/** All on-chain capsules (deduped). Gallery filters to opened in the UI. */
+export async function buildGalleryPool(): Promise<CapsuleItem[]> {
+  return loadOnchainCapsulesDeduped();
 }
 
-/** Only capsules that are open at `chainNowSec`. */
+/** Same list as gallery; Home keeps first 3 opened in the component. */
+export async function buildHomeRecentlyOpenedCapsules(
+  _chainNowSec: number,
+  _limit = 3,
+): Promise<CapsuleItem[]> {
+  void _chainNowSec;
+  void _limit;
+  return loadOnchainCapsulesDeduped();
+}
+
+/** Capsules whose unlock time has passed (requires `unlockAtUnix`). */
 export function filterOpenedAtChainTime(
   items: CapsuleItem[],
   chainNowSec: number,
 ): CapsuleItem[] {
-  return sortNewestOpenedFirst(
-    items.filter((item) => isOpenedAtChainTime(item, chainNowSec)),
-  );
-}
-
-/**
- * Home hero row: real public on-chain opened capsules only.
- * Newest unlock time first; capped at `limit` (default 3).
- */
-export async function buildHomeRecentlyOpenedCapsules(
-  chainNowSec: number,
-  limit = 3,
-): Promise<CapsuleItem[]> {
   const now = normalizeBlockTimestampToSeconds(chainNowSec);
-  if (now <= 0) return [];
-
-  const loaded = await withTimeout(
-    loadPublicOnchainCapsules(),
-    HOME_LOAD_TIMEOUT_MS,
-    lastGalleryPool.length > 0 ? lastGalleryPool : lastHomeRecentlyOpened,
+  return sortByUnlockNewestFirst(
+    items.filter((item) => isOpenedAtChainTime(item, now)),
   );
-  const filterDebug = loaded.map((item) => describeOpenFilter(item, now));
-  const pool = sortNewestOpenedFirst(dedupeById(loaded).filter(hasPublicContent));
-  const opened = filterOpenedAtChainTime(pool, now);
-
-  console.debug("[HomeRecentlyOpenedBuilder] opened capsules", {
-    now,
-    loaded: loaded.length,
-    withPublicContent: pool.length,
-    opened: opened.length,
-    filter: filterDebug,
-    items: pool.map((item) => ({
-      id: item.id,
-      unlockAtUnix: item.unlockAtUnix,
-      hasPhoto: Boolean(item.userPhoto),
-      messageLength: item.message.length,
-    })),
-  });
-
-  if (pool.length > 0) {
-    lastGalleryPool = pool;
-  }
-  const result = opened.slice(0, limit);
-  if (result.length > 0) {
-    lastHomeRecentlyOpened = result;
-  }
-  return pool.length > 0 ? pool : lastHomeRecentlyOpened.slice(0, limit);
 }

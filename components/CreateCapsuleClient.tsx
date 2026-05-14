@@ -67,29 +67,6 @@ const TAGS: CapsuleTag[] = [
   "Nature",
 ];
 
-function capsuleCacheKey(item: CapsuleItem): string {
-  return [
-    item.owner?.toLowerCase() ?? "",
-    item.unlockAtUnix == null ? "" : Math.floor(item.unlockAtUnix).toString(),
-    item.message.trim(),
-    item.tag,
-  ].join("|");
-}
-
-function prependUniqueCapsule(
-  current: CapsuleItem[] = [],
-  item: CapsuleItem,
-): CapsuleItem[] {
-  const key = capsuleCacheKey(item);
-  return [
-    item,
-    ...current.filter(
-      (currentItem) =>
-        currentItem.id !== item.id && capsuleCacheKey(currentItem) !== key,
-    ),
-  ];
-}
-
 function toDatetimeLocalMin(sec: number) {
   const d = new Date(sec * 1000);
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -301,20 +278,6 @@ export function CreateCapsuleClient() {
           userPhoto: "",
         });
 
-        queryClient.setQueryData<CapsuleItem[]>(
-          CAPSULE_QUERIES.user(address),
-          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
-        );
-
-        queryClient.setQueryData<CapsuleItem[]>(
-          CAPSULE_QUERIES.gallery(),
-          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
-        );
-        queryClient.setQueryData<CapsuleItem[]>(
-          CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-          (current = []) => prependUniqueCapsule(current, optimisticCapsule),
-        );
-
         const refreshCapsuleQueries = async () => {
           clearPublicOnchainCapsulesCache();
           console.debug("[CreateCapsule] refreshing capsule queries", {
@@ -325,13 +288,17 @@ export function CreateCapsuleClient() {
           });
 
           await Promise.all([
-            queryClient.removeQueries({
+            queryClient.invalidateQueries({
               queryKey: CAPSULE_QUERIES.gallery(),
-              type: "inactive",
+              refetchType: "all",
             }),
-            queryClient.removeQueries({
+            queryClient.invalidateQueries({
               queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-              type: "inactive",
+              refetchType: "all",
+            }),
+            queryClient.invalidateQueries({
+              queryKey: CAPSULE_QUERIES.user(address),
+              refetchType: "all",
             }),
             queryClient.invalidateQueries({
               queryKey: CAPSULE_QUERIES.root,

@@ -9,14 +9,15 @@ import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import {
   buildGalleryPool,
+  capsuleCompositeKey,
+  dedupeCapsules,
   filterOpenedAtChainTime,
 } from "@/lib/capsule-lists";
-import {
-  loadPublicOnchainCapsuleById,
-} from "@/lib/public-onchain-capsules";
+import { loadPublicOnchainCapsuleById } from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
 
 const GALLERY_PAGE_SIZE = 12;
+const REFETCH_MS = 15_000;
 
 function parseCapsuleHash(hash: string): string | null {
   const normalized = decodeURIComponent(hash.trim());
@@ -48,25 +49,23 @@ export function GalleryClient() {
   const [directItem, setDirectItem] = useState<CapsuleItem | null>(null);
   const [directLoading, setDirectLoading] = useState(false);
 
-  const {
-    data: pool,
-    error,
-    isPending,
-  } = useQuery({
+  const { data: pool, isPending } = useQuery<CapsuleItem[]>({
     queryKey: CAPSULE_QUERIES.gallery(),
-    queryFn: () => buildGalleryPool(effectiveNowSec),
-    staleTime: 15_000,
+    queryFn: buildGalleryPool,
+    staleTime: 0,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: 5_000,
+    refetchInterval: REFETCH_MS,
+    refetchIntervalInBackground: true,
   });
 
   const openedItems = useMemo(() => {
-    if (!pool) return [];
-    return filterOpenedAtChainTime(pool, effectiveNowSec);
+    const list = dedupeCapsules(pool ?? []);
+    return filterOpenedAtChainTime(list, effectiveNowSec);
   }, [pool, effectiveNowSec]);
+
   const visibleItems = openedItems.slice(0, visibleCount);
   const selectedItem = selectedId
     ? openedItems.find((item) => item.id === selectedId) ?? directItem
@@ -76,7 +75,7 @@ export function GalleryClient() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setLocalNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
+    }, 250);
     return () => window.clearInterval(id);
   }, []);
 
@@ -130,17 +129,12 @@ export function GalleryClient() {
     setDirectLoading(true);
     loadPublicOnchainCapsuleById(tokenId)
       .then((item) => {
-        if (cancelled) return;
+        if (cancelled || !item) return;
         setDirectItem(item);
-        if (item) {
-          queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.gallery(),
-            (current = []) => [
-              item,
-              ...current.filter((capsule) => capsule.id !== item.id),
-            ],
-          );
-        }
+        queryClient.setQueryData<CapsuleItem[]>(
+          CAPSULE_QUERIES.gallery(),
+          (current = []) => dedupeCapsules([item, ...current]),
+        );
       })
       .finally(() => {
         if (!cancelled) setDirectLoading(false);
@@ -151,34 +145,11 @@ export function GalleryClient() {
     };
   }, [openedItems, queryClient, selectedId]);
 
-  useEffect(() => {
-    if (pool === undefined) return;
-    console.debug("[GalleryClient] loaded", {
-      nowSec: effectiveNowSec,
-      chainReady: ready,
-      total: pool.length,
-      opened: openedItems.length,
-      visible: visibleItems.length,
-      error,
-      items: pool.map((item) => ({
-        id: item.id,
-        unlockAtUnix: item.unlockAtUnix,
-        isOpened:
-          item.unlockAtUnix != null && item.unlockAtUnix <= effectiveNowSec,
-        hasPhoto: Boolean(item.userPhoto),
-        messageLength: item.message.length,
-      })),
-    });
-  }, [
-    effectiveNowSec,
-    error,
-    openedItems.length,
-    pool,
-    ready,
-    visibleItems.length,
-  ]);
+  const showSkeleton =
+    isPending &&
+    ((pool as CapsuleItem[] | undefined)?.length ?? 0) === 0;
 
-  if (isPending && pool === undefined) {
+  if (showSkeleton) {
     return (
       <div className="ritual-card-grid lg:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
@@ -211,10 +182,7 @@ export function GalleryClient() {
     <>
       <div className="ritual-card-grid lg:grid-cols-4">
         {visibleItems.map((item) => (
-          <CapsuleGridSlot
-            key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
-            scrollId={`capsule-${item.id}`}
-          >
+          <CapsuleGridSlot key={capsuleCompositeKey(item)} scrollId={`capsule-${item.id}`}>
             <CapsuleCard
               item={item}
               forceOpened

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleFullViewModal } from "@/components/CapsuleFullViewModal";
@@ -10,10 +10,14 @@ import { useChainTime } from "@/components/web3-provider";
 import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import {
   buildHomeRecentlyOpenedCapsules,
+  capsuleCompositeKey,
+  dedupeCapsules,
   filterOpenedAtChainTime,
 } from "@/lib/capsule-lists";
+import type { CapsuleItem } from "@/lib/capsule-types";
 
 const HOME_OPEN_COUNT = 3;
+const REFETCH_MS = 15_000;
 
 export function HomeRecentlyOpened() {
   const { nowSec, ready } = useChainTime();
@@ -24,26 +28,30 @@ export function HomeRecentlyOpened() {
   const effectiveNowSec = Math.max(chainNowSec, localNowSec);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data, error, isPending } = useQuery({
+  const { data, isPending } = useQuery<CapsuleItem[]>({
     queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
     queryFn: () =>
       buildHomeRecentlyOpenedCapsules(effectiveNowSec, HOME_OPEN_COUNT),
-    staleTime: 15_000,
+    staleTime: 0,
     gcTime: 30 * 60_000,
     placeholderData: (previousData) => previousData,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: 5_000,
+    refetchInterval: REFETCH_MS,
+    refetchIntervalInBackground: true,
   });
 
-  const items = filterOpenedAtChainTime(data ?? [], effectiveNowSec).slice(
-    0,
-    HOME_OPEN_COUNT,
-  );
+  const items = useMemo(() => {
+    const list = dedupeCapsules(data ?? []);
+    return filterOpenedAtChainTime(list, effectiveNowSec).slice(
+      0,
+      HOME_OPEN_COUNT,
+    );
+  }, [data, effectiveNowSec]);
+
   const selectedItem = selectedId
     ? items.find((item) => item.id === selectedId) ?? null
     : null;
-  const showSkeleton = isPending && data === undefined;
 
   const openCapsule = useCallback((id: string) => {
     setSelectedId(id);
@@ -56,25 +64,13 @@ export function HomeRecentlyOpened() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setLocalNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
+    }, 250);
     return () => window.clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    if (data === undefined) return;
-    console.debug("[RecentlyOpened] fetched", {
-      nowSec: effectiveNowSec,
-      chainReady: ready,
-      count: data.length,
-      error,
-      items: data.map((item) => ({
-        id: item.id,
-        unlockAtUnix: item.unlockAtUnix,
-        hasPhoto: Boolean(item.userPhoto),
-        messageLength: item.message.length,
-      })),
-    });
-  }, [data, effectiveNowSec, error, ready]);
+  const showSkeleton =
+    isPending &&
+    ((data as CapsuleItem[] | undefined)?.length ?? 0) === 0;
 
   return (
     <section
@@ -105,34 +101,30 @@ export function HomeRecentlyOpened() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3 md:gap-7 lg:gap-8">
-        {showSkeleton ? (
-          Array.from({ length: HOME_OPEN_COUNT }, (_, i) => (
-            <CapsuleGridSlot key={`sk-${i}`} hover={false}>
-              <div className="flex h-full min-h-[26rem] flex-col rounded-2xl border border-white/[0.08] bg-gradient-to-b from-zinc-950/90 to-black/90 p-4 sm:min-h-[28rem] md:min-h-[30rem] md:p-5">
-                <div className="relative aspect-[4/3] min-h-[14rem] w-full shrink-0 animate-pulse rounded-xl bg-white/[0.06] sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64" />
-                <div className="mt-4 min-h-[4.25rem] animate-pulse rounded-lg bg-white/[0.05]" />
-                <div className="mt-auto border-t border-white/[0.06] pt-4">
-                  <div className="h-3 w-2/5 animate-pulse rounded bg-white/[0.06]" />
+        {showSkeleton
+          ? Array.from({ length: HOME_OPEN_COUNT }, (_, i) => (
+              <CapsuleGridSlot key={`sk-${i}`} hover={false}>
+                <div className="flex h-full min-h-[26rem] flex-col rounded-2xl border border-white/[0.08] bg-gradient-to-b from-zinc-950/90 to-black/90 p-4 sm:min-h-[28rem] md:min-h-[30rem] md:p-5">
+                  <div className="relative aspect-[4/3] min-h-[14rem] w-full shrink-0 animate-pulse rounded-xl bg-white/[0.06] sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64" />
+                  <div className="mt-4 min-h-[4.25rem] animate-pulse rounded-lg bg-white/[0.05]" />
+                  <div className="mt-auto border-t border-white/[0.06] pt-4">
+                    <div className="h-3 w-2/5 animate-pulse rounded bg-white/[0.06]" />
+                  </div>
                 </div>
-              </div>
-            </CapsuleGridSlot>
-          ))
-        ) : (
-          items.map((item) => (
-            <CapsuleGridSlot
-              key={`${item.id}-${item.userPhoto ? item.userPhoto.slice(0, 80) : "no-photo"}`}
-            >
-              <CapsuleCard
-                item={item}
-                variant="spotlight"
-                forceOpened
-                hideShare
-                onOpen={() => openCapsule(item.id)}
-                className="h-full min-h-0 flex-1 border-transparent"
-              />
-            </CapsuleGridSlot>
-          ))
-        )}
+              </CapsuleGridSlot>
+            ))
+          : items.map((item) => (
+              <CapsuleGridSlot key={capsuleCompositeKey(item)}>
+                <CapsuleCard
+                  item={item}
+                  variant="spotlight"
+                  forceOpened
+                  hideShare
+                  onOpen={() => openCapsule(item.id)}
+                  className="h-full min-h-0 flex-1 border-transparent"
+                />
+              </CapsuleGridSlot>
+            ))}
       </div>
       <CapsuleFullViewModal item={selectedItem} onClose={closeCapsule} />
     </section>

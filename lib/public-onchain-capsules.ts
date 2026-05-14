@@ -109,61 +109,199 @@ function decodeTokenUriPayload(tokenURI: string): string | null {
   }
 }
 
-function parseTokenUri(tokenURI: string): Pick<CapsuleItem, "message" | "tag" | "userPhoto"> {
-  if (!tokenURI.trim()) {
+function ipfsToHttpGateway(uri: string): string {
+  const trimmed = uri.trim();
+  const lower = trimmed.toLowerCase();
+  if (!lower.startsWith("ipfs://")) return trimmed;
+  const rest = trimmed.slice("ipfs://".length).replace(/^ipfs\//i, "");
+  return `https://ipfs.io/ipfs/${rest}`;
+}
+
+/**
+ * Turns on-chain tokenURI into a JSON string for metadata parsing.
+ * Supports data: URIs, raw JSON, http(s), and ipfs:// (via gateway).
+ */
+async function resolveTokenUriToJsonString(
+  tokenURI: string,
+  context: { tokenId?: string },
+): Promise<string> {
+  const raw = tokenURI.trim();
+  if (!raw) return "";
+
+  if (raw.startsWith("{") && raw.endsWith("}")) {
+    return raw;
+  }
+
+  if (raw.toLowerCase().startsWith("data:")) {
+    const decoded = decodeTokenUriPayload(raw);
+    if (!decoded) {
+      console.debug("[PublicOnchainCapsules] data URI decode failed", {
+        ...context,
+        header: raw.slice(0, 80),
+      });
+    }
+    return decoded ?? "";
+  }
+
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    try {
+      const res = await withTimeout(
+        fetch(raw, {
+          method: "GET",
+          headers: { Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
+          cache: "no-store",
+        }),
+        TOKEN_URI_TIMEOUT_MS,
+      );
+      if (!res.ok) {
+        console.debug("[PublicOnchainCapsules] http tokenURI not OK", {
+          ...context,
+          status: res.status,
+          url: raw.slice(0, 200),
+        });
+        return "";
+      }
+      return await withTimeout(res.text(), TOKEN_URI_TIMEOUT_MS);
+    } catch (error) {
+      console.debug("[PublicOnchainCapsules] http tokenURI fetch failed", {
+        ...context,
+        url: raw.slice(0, 200),
+        error,
+      });
+      return "";
+    }
+  }
+
+  if (raw.toLowerCase().startsWith("ipfs://")) {
+    const gateway = ipfsToHttpGateway(raw);
+    try {
+      const res = await withTimeout(
+        fetch(gateway, {
+          method: "GET",
+          headers: { Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
+          cache: "no-store",
+        }),
+        TOKEN_URI_TIMEOUT_MS,
+      );
+      if (!res.ok) {
+        console.debug("[PublicOnchainCapsules] ipfs gateway not OK", {
+          ...context,
+          status: res.status,
+          gateway: gateway.slice(0, 200),
+        });
+        return "";
+      }
+      return await withTimeout(res.text(), TOKEN_URI_TIMEOUT_MS);
+    } catch (error) {
+      console.debug("[PublicOnchainCapsules] ipfs fetch failed", {
+        ...context,
+        gateway: gateway.slice(0, 200),
+        error,
+      });
+      return "";
+    }
+  }
+
+  console.debug("[PublicOnchainCapsules] unknown tokenURI scheme", {
+    ...context,
+    preview: raw.slice(0, 120),
+  });
+  return raw;
+}
+
+function pickString(...candidates: unknown[]): string {
+  for (const v of candidates) {
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (s.length > 0) return s;
+    }
+  }
+  return "";
+}
+
+function parseMetadataJson(
+  json: string,
+  context: { tokenId?: string },
+): Pick<CapsuleItem, "message" | "tag" | "userPhoto"> {
+  if (!json.trim()) {
     return { message: "", tag: "Personal", userPhoto: "" };
   }
 
   try {
-    const json = tokenURI.startsWith("data:")
-      ? decodeTokenUriPayload(tokenURI)
-      : tokenURI;
-    if (!json) return { message: "", tag: "Personal", userPhoto: "" };
-
     const parsed = JSON.parse(json) as {
       m?: unknown;
       message?: unknown;
       description?: unknown;
       d?: unknown;
+      body?: unknown;
+      text?: unknown;
+      content?: unknown;
+      name?: unknown;
       tag?: unknown;
       c?: unknown;
       i?: unknown;
       image?: unknown;
+      image_url?: unknown;
       image_data?: unknown;
       userPhoto?: unknown;
       photo?: unknown;
+      picture?: unknown;
+      animation_url?: unknown;
     };
+
     const tag = isCapsuleTag(parsed.tag)
       ? parsed.tag
       : isCapsuleTag(parsed.c)
         ? parsed.c
         : "Personal";
-    const message =
-      typeof parsed.m === "string"
-        ? parsed.m.trim()
-        : typeof parsed.message === "string"
-        ? parsed.message.trim()
-        : typeof parsed.description === "string"
-          ? parsed.description.trim()
-          : typeof parsed.d === "string"
-            ? parsed.d.trim()
-            : "";
-    const userPhoto =
-      typeof parsed.i === "string"
-        ? parsed.i.trim()
-        : typeof parsed.image === "string"
-        ? parsed.image.trim()
-        : typeof parsed.image_data === "string"
-          ? parsed.image_data.trim()
-        : typeof parsed.userPhoto === "string"
-          ? parsed.userPhoto.trim()
-          : typeof parsed.photo === "string"
-            ? parsed.photo.trim()
-            : "";
+
+    const message = pickString(
+      parsed.m,
+      parsed.message,
+      parsed.description,
+      parsed.d,
+      parsed.body,
+      parsed.text,
+      typeof parsed.content === "string" ? parsed.content : undefined,
+      parsed.name,
+    );
+
+    const userPhoto = pickString(
+      parsed.i,
+      parsed.image,
+      parsed.image_url,
+      parsed.image_data,
+      parsed.userPhoto,
+      parsed.photo,
+      parsed.picture,
+      parsed.animation_url,
+    );
+
+    if (!message && !userPhoto) {
+      console.debug("[PublicOnchainCapsules] parsed metadata has no message/photo", {
+        ...context,
+        keys: parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
+        jsonPreview: json.slice(0, 160),
+      });
+    }
+
     return { message, tag, userPhoto };
-  } catch {
+  } catch (error) {
+    console.debug("[PublicOnchainCapsules] JSON.parse failed for metadata", {
+      ...context,
+      error,
+      jsonPreview: json.slice(0, 200),
+    });
     return { message: "", tag: "Personal", userPhoto: "" };
   }
+}
+
+async function parseTokenUriAsync(
+  tokenURI: string,
+  context: { tokenId?: string },
+): Promise<Pick<CapsuleItem, "message" | "tag" | "userPhoto">> {
+  const json = await resolveTokenUriToJsonString(tokenURI, context);
+  return parseMetadataJson(json, context);
 }
 
 export async function loadPublicOnchainCapsuleById(
@@ -172,6 +310,7 @@ export async function loadPublicOnchainCapsuleById(
   const address = getRitualCapsuleAddress();
   if (!address) return null;
 
+  const idStr = tokenId.toString();
   try {
     const tokenURI = await withTimeout(
       publicClient.readContract({
@@ -182,9 +321,9 @@ export async function loadPublicOnchainCapsuleById(
       }),
       TOKEN_URI_TIMEOUT_MS,
     );
-    const metadata = parseTokenUri(tokenURI);
+    const metadata = await parseTokenUriAsync(tokenURI, { tokenId: idStr });
     const item: CapsuleItem = {
-      id: `onchain-${tokenId.toString()}`,
+      id: `onchain-${idStr}`,
       ...metadata,
     };
 
@@ -203,12 +342,13 @@ export async function loadPublicOnchainCapsuleById(
       id: item.id,
       hasPhoto: Boolean(item.userPhoto),
       messageLength: item.message.length,
+      tokenUriPreview: String(tokenURI).slice(0, 100),
     });
 
     return item;
   } catch (error) {
     console.warn("[PublicOnchainCapsules] failed direct tokenURI read", {
-      tokenId: tokenId.toString(),
+      tokenId: idStr,
       error,
     });
     return null;
@@ -305,6 +445,15 @@ async function loadPublicOnchainCapsulesFresh(): Promise<CapsuleItem[]> {
       const tokenId = log.args.tokenId;
       if (tokenId == null) return null;
 
+      const idStr = tokenId.toString();
+      const unlockAtUnix = normalizeUnlock(log.args.unlockTimestamp);
+      if (unlockAtUnix == null) {
+        console.debug("[PublicOnchainCapsules] mint log missing unlockTimestamp", {
+          tokenId: idStr,
+          args: log.args,
+        });
+      }
+
       try {
         const tokenURI = await withTimeout(
           publicClient.readContract({
@@ -315,17 +464,17 @@ async function loadPublicOnchainCapsulesFresh(): Promise<CapsuleItem[]> {
           }),
           TOKEN_URI_TIMEOUT_MS,
         );
-        const metadata = parseTokenUri(tokenURI);
+        const metadata = await parseTokenUriAsync(tokenURI, { tokenId: idStr });
 
         return {
-          id: `onchain-${tokenId.toString()}`,
+          id: `onchain-${idStr}`,
           owner: log.args.owner?.toLowerCase(),
-          unlockAtUnix: normalizeUnlock(log.args.unlockTimestamp),
+          unlockAtUnix,
           ...metadata,
         };
       } catch (error) {
         console.warn("[PublicOnchainCapsules] failed tokenURI read", {
-          tokenId: tokenId.toString(),
+          tokenId: idStr,
           error,
         });
         return null;
