@@ -7,7 +7,7 @@ export type StoredMintedCapsule = {
   unlockAtUnix: number;
   message: string;
   tag: CapsuleTag;
-  /** Never persist user photos locally; public photos are read from on-chain metadata. */
+  /** Local copy for instant My Capsules reveal after unlock (also on-chain). */
   userPhoto: string;
 };
 
@@ -46,17 +46,13 @@ function writeAll(items: StoredMintedCapsule[]) {
 export function loadMintedCapsules(): StoredMintedCapsule[] {
   const all = readRaw();
   const seen = new Set<string>();
-  const sanitized = all.map((item) => ({ ...item, userPhoto: "" }));
-  const deduped = sanitized.filter((item) => {
+  const deduped = all.filter((item) => {
     const key = canonicalMintKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  if (
-    deduped.length !== all.length ||
-    all.some((item) => item.userPhoto.trim().length > 0)
-  ) {
+  if (deduped.length !== all.length) {
     writeAll(deduped);
   }
   return deduped;
@@ -64,12 +60,11 @@ export function loadMintedCapsules(): StoredMintedCapsule[] {
 
 export function appendMintedCapsule(item: StoredMintedCapsule): void {
   const all = readRaw();
-  const sanitized = { ...item, userPhoto: "" };
-  const itemKey = canonicalMintKey(sanitized);
+  const itemKey = canonicalMintKey(item);
   const rest = all.filter(
     (x) => x.id !== item.id && canonicalMintKey(x) !== itemKey,
   );
-  writeAll([sanitized, ...rest.map((x) => ({ ...x, userPhoto: "" }))]);
+  writeAll([item, ...rest]);
 }
 
 export function storedToCapsuleItem(s: StoredMintedCapsule): CapsuleItem {

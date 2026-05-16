@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { resolveCapsuleMedia } from "@/lib/capsule-display";
 import type { CapsuleItem } from "@/lib/capsule-types";
+import { loadPublicOnchainCapsuleById } from "@/lib/public-onchain-capsules";
+
+function tokenIdFromCapsuleId(id: string): bigint | null {
+  const raw = id.startsWith("onchain-") ? id.slice("onchain-".length) : id;
+  if (!/^\d+$/.test(raw)) return null;
+  return BigInt(raw);
+}
 
 export function CapsuleFullViewModal({
   item,
@@ -11,6 +19,12 @@ export function CapsuleFullViewModal({
   onClose: () => void;
 }) {
   const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">("");
+  const [displayItem, setDisplayItem] = useState<CapsuleItem | null>(item);
+  const [photoLoading, setPhotoLoading] = useState(false);
+
+  useEffect(() => {
+    setDisplayItem(item);
+  }, [item]);
 
   useEffect(() => {
     if (!item) return;
@@ -29,7 +43,36 @@ export function CapsuleFullViewModal({
     };
   }, [item, onClose]);
 
+  useEffect(() => {
+    if (!item) return;
+    if (item.userPhoto.trim()) {
+      setDisplayItem(item);
+      return;
+    }
+
+    const tokenId = tokenIdFromCapsuleId(item.id);
+    if (tokenId == null) return;
+
+    let cancelled = false;
+    setPhotoLoading(true);
+    loadPublicOnchainCapsuleById(tokenId)
+      .then((hydrated) => {
+        if (cancelled || !hydrated) return;
+        setDisplayItem(hydrated);
+      })
+      .finally(() => {
+        if (!cancelled) setPhotoLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [item]);
+
   if (!item) return null;
+
+  const view = displayItem ?? item;
+  const { photoSrc, messageText } = resolveCapsuleMedia(view);
 
   const shareUrl =
     typeof window === "undefined"
@@ -68,18 +111,21 @@ export function CapsuleFullViewModal({
         </button>
 
         <div className="relative flex min-h-[18rem] items-center justify-center bg-black md:min-h-[34rem]">
-          {item.userPhoto ? (
+          {photoSrc.length > 0 ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={item.userPhoto}
+              src={photoSrc}
               alt="Opened capsule content"
               className="max-h-[60vh] w-full object-contain md:max-h-[82vh]"
               loading="eager"
               decoding="async"
             />
           ) : (
-            <div className="px-6 text-center text-sm text-zinc-500">
-              No photo available for this capsule.
+            <div className="flex min-h-[18rem] w-full items-center justify-center px-6 md:min-h-[34rem]">
+              <div className="h-48 w-full max-w-md animate-pulse rounded-2xl bg-white/5" />
+              {photoLoading ? (
+                <span className="sr-only">Loading photo from chain</span>
+              ) : null}
             </div>
           )}
         </div>
@@ -90,12 +136,16 @@ export function CapsuleFullViewModal({
               Opened Capsule
             </p>
             <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">
-              {item.tag}
+              {view.tag}
             </h2>
           </div>
 
           <p className="whitespace-pre-wrap text-base leading-relaxed text-zinc-200">
-            {item.message || "No message"}
+            {messageText || (
+              <span className="text-zinc-500 animate-pulse">
+                Loading message from chain…
+              </span>
+            )}
           </p>
 
           <div className="mt-auto space-y-3 border-t border-white/10 pt-5">

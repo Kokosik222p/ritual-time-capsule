@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
+import { resolveCapsuleMedia } from "@/lib/capsule-display";
 import { formatOpenedAgo, formatSealedUntil } from "@/lib/time-format";
 import { useChainTime } from "@/components/web3-provider";
 
@@ -20,7 +21,6 @@ const PHOTO_SHELL_DEFAULT =
   "group-hover:ring-white/40 " +
   "group-hover:shadow-[0_0_32px_-8px_rgba(168,85,247,0.45),0_0_22px_-6px_rgba(34,211,238,0.28)]";
 
-/** Taller photo + tighter radius for Home “spotlight” row. */
 const PHOTO_SHELL_SPOTLIGHT =
   "relative aspect-[4/3] min-h-[14rem] w-full shrink-0 overflow-hidden rounded-[0.875rem] bg-black/55 sm:aspect-auto sm:h-[15.5rem] sm:min-h-0 md:h-64 " +
   "ring-1 ring-inset ring-white/28 " +
@@ -78,64 +78,53 @@ export function CapsuleCard({
   item: CapsuleItem;
   forceOpened?: boolean;
   hideShare?: boolean;
-  /** `spotlight` — premium Home row: taller photo, gradient shell, time-only footer. */
   variant?: "default" | "spotlight";
   className?: string;
   onOpen?: () => void;
 }) {
   const spotlight = variant === "spotlight";
   const { nowSec, ready } = useChainTime();
-  const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">(
-    "",
-  );
+  const [shareStatus, setShareStatus] = useState<"" | "copied" | "failed">("");
   const [localNowSec, setLocalNowSec] = useState(() =>
     Math.floor(Date.now() / 1000),
   );
-  const photoSrc = item.userPhoto || "";
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setLocalNowSec(Math.floor(Date.now() / 1000));
-    }, 250);
-    return () => window.clearInterval(id);
-  }, []);
 
   const chainNowFromProvider =
     ready && Number.isFinite(nowSec) && nowSec > 0
       ? normalizeBlockTimestampToSeconds(nowSec)
       : 0;
-  const chainNow = Math.max(chainNowFromProvider, localNowSec);
-  const unlockRaw = normalizeOptionalUnixTime(item.unlockAtUnix);
+  const unlockAt = normalizeOptionalUnixTime(item.unlockAtUnix);
+  const needsLiveClock =
+    !forceOpened &&
+    (unlockAt == null || unlockAt > Math.max(chainNowFromProvider, localNowSec));
 
-  // Opened vs sealed: chain time only (local clock keeps UI in sync between RPC polls).
-  let isOpenedVisual: boolean;
-  let isSealed: boolean;
-  if (forceOpened) {
-    isOpenedVisual = true;
-    isSealed = false;
-  } else if (unlockRaw == null) {
-    isOpenedVisual = false;
-    isSealed = true;
-  } else {
-    isOpenedVisual = unlockRaw <= chainNow;
-    isSealed = !isOpenedVisual;
-  }
+  useEffect(() => {
+    if (!needsLiveClock) return;
+    const id = window.setInterval(() => {
+      setLocalNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [needsLiveClock]);
+
+  const nowSecEffective = Math.max(chainNowFromProvider, localNowSec);
+  const { photoSrc, messageText } = resolveCapsuleMedia(item);
+  const hasPhoto = photoSrc.length > 0;
+  const hasMessage = messageText.length > 0;
+
+  const isOpenedVisual =
+    forceOpened || (unlockAt != null && unlockAt <= nowSecEffective);
+  const isSealed = !isOpenedVisual;
+  const isOpened = isOpenedVisual;
 
   const timeLabel = (() => {
-    if (forceOpened) {
-      const u = unlockRaw;
-      if (u == null || !Number.isFinite(u)) {
+    if (isOpened) {
+      if (unlockAt == null || !Number.isFinite(unlockAt)) {
         return "Opened recently";
       }
-      const openedAt = Math.min(Math.floor(u), chainNow);
-      return formatOpenedAgo(openedAt, chainNow);
+      const openedAt = Math.min(Math.floor(unlockAt), nowSecEffective);
+      return formatOpenedAgo(openedAt, nowSecEffective);
     }
-    if (isSealed) {
-      return formatSealedUntil(unlockRaw ?? chainNow);
-    }
-    const u = unlockRaw ?? 0;
-    const openedAt = u > 0 ? Math.min(Math.floor(u), chainNow) : chainNow;
-    return formatOpenedAgo(openedAt, chainNow);
+    return formatSealedUntil(unlockAt ?? nowSecEffective);
   })();
 
   const cardBase = spotlight
@@ -171,53 +160,42 @@ export function CapsuleCard({
             </PhotoBlock>
             <div className={`${MESSAGE_MIN} mt-3 flex-1`} aria-hidden />
           </>
-        ) : isOpenedVisual ? (
+        ) : (
           <>
-            {photoSrc ? (
-              <PhotoBlock key={photoSrc} spotlight={spotlight}>
-                <CategoryBadge tag={item.tag} spotlight={spotlight} />
-                {/* Dynamic blob/data images are more reliable as plain <img> on mobile. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
+            <PhotoBlock spotlight={spotlight}>
+              <CategoryBadge tag={item.tag} spotlight={spotlight} />
+              {hasPhoto ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  key={`opened-${item.id}-${photoSrc}`}
+                  key={photoSrc.slice(0, 48)}
                   src={photoSrc}
                   alt="Capsule content"
                   className="capsule-opened-photo"
-                  data-unoptimized="true"
-                  loading="eager"
+                  loading={forceOpened ? "eager" : "lazy"}
                   decoding="async"
-                  sizes="(max-width: 480px) calc(100vw - 48px), (max-width: 768px) calc(100vw - 64px), 280px"
+                  fetchPriority={forceOpened ? "high" : "auto"}
                 />
-              </PhotoBlock>
-            ) : (
-              <PhotoBlock spotlight={spotlight}>
-                <CategoryBadge tag={item.tag} spotlight={spotlight} />
-                <div className="flex h-full items-center justify-center bg-zinc-950/90 text-center text-xs text-zinc-500">
-                  No photo
-                </div>
-              </PhotoBlock>
-            )}
+              ) : null}
+            </PhotoBlock>
             <p
               className={`mt-3 line-clamp-4 flex-shrink-0 text-sm leading-relaxed sm:mt-4 ${spotlight ? "font-normal text-zinc-200/95" : "text-zinc-300"} ${MESSAGE_MIN}`}
             >
-              {item.message || (
-                <span className="text-zinc-600">No message</span>
-              )}
+              {hasMessage ? messageText : null}
             </p>
             <div className="min-h-[1px] flex-1" aria-hidden />
           </>
-        ) : null}
+        )}
       </div>
 
       <div
-        className={`mt-auto flex shrink-0 items-end gap-2 border-t pt-3 sm:pt-4 ${spotlight ? "border-white/[0.08]" : "border-white/10"} ${isOpenedVisual && hideShare ? "justify-start" : "justify-between"}`}
+        className={`mt-auto flex shrink-0 items-end gap-2 border-t pt-3 sm:pt-4 ${spotlight ? "border-white/[0.08]" : "border-white/10"} ${isOpened && hideShare ? "justify-start" : "justify-between"}`}
       >
         <p
           className={`min-w-0 flex-1 leading-snug ${spotlight ? "text-[11px] font-medium tracking-wide text-zinc-400 tabular-nums sm:text-xs" : "text-xs text-zinc-400"}`}
         >
           {timeLabel}
         </p>
-        {isOpenedVisual && !hideShare ? (
+        {isOpened && !hideShare ? (
           <button
             type="button"
             onClick={async (event) => {
@@ -245,3 +223,4 @@ export function CapsuleCard({
     </div>
   );
 }
+

@@ -1,23 +1,21 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CapsuleCard } from "@/components/CapsuleCard";
 import { CapsuleFullViewModal } from "@/components/CapsuleFullViewModal";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
 import { useChainTime } from "@/components/web3-provider";
-import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
 import {
   buildGalleryPool,
-  capsuleDedupeKey,
-  dedupeCapsules,
-  filterOpenedAtChainTime,
+  buildGalleryPoolFromCache,
+  capsuleReactKey,
 } from "@/lib/capsule-lists";
-import { loadPublicOnchainCapsuleById } from "@/lib/public-onchain-capsules";
+import {
+  loadPublicOnchainCapsuleById,
+  loadPublicOnchainCapsules,
+  subscribePublicOnchainCapsules,
+} from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
-
-const GALLERY_PAGE_SIZE = 12;
-const REFETCH_MS = 15_000;
 
 function parseCapsuleHash(hash: string): string | null {
   const normalized = decodeURIComponent(hash.trim());
@@ -38,47 +36,35 @@ function tokenIdFromCapsuleId(id: string | null): bigint | null {
 
 export function GalleryClient() {
   const { nowSec, ready } = useChainTime();
-  const [localNowSec, setLocalNowSec] = useState(() =>
-    Math.floor(Date.now() / 1000),
-  );
   const chainNowSec = ready && nowSec > 0 ? nowSec : 0;
-  const effectiveNowSec = Math.max(chainNowSec, localNowSec);
-  const queryClient = useQueryClient();
-  const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE);
+  const effectiveNowSec =
+    chainNowSec > 0 ? chainNowSec : Math.floor(Date.now() / 1000);
+  const [mounted, setMounted] = useState(false);
+  const [displayItems, setDisplayItems] = useState<CapsuleItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [directItem, setDirectItem] = useState<CapsuleItem | null>(null);
-  const [directLoading, setDirectLoading] = useState(false);
 
-  const { data: pool, isPending } = useQuery<CapsuleItem[]>({
-    queryKey: CAPSULE_QUERIES.gallery(),
-    queryFn: buildGalleryPool,
-    select: (data) => dedupeCapsules(data ?? []),
-    staleTime: 0,
-    gcTime: 30 * 60_000,
-    placeholderData: (previousData) => previousData,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
-    refetchInterval: REFETCH_MS,
-    refetchIntervalInBackground: true,
-  });
-
-  const openedItems = useMemo(() => {
-    const list = dedupeCapsules(pool ?? []);
-    return filterOpenedAtChainTime(list, effectiveNowSec);
-  }, [pool, effectiveNowSec]);
-
-  const visibleItems = openedItems.slice(0, visibleCount);
-  const selectedItem = selectedId
-    ? openedItems.find((item) => item.id === selectedId) ?? directItem
-    : null;
-  const hasMore = visibleCount < openedItems.length;
+  const syncFromCache = useCallback(() => {
+    setDisplayItems(buildGalleryPoolFromCache(effectiveNowSec));
+  }, [effectiveNowSec]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setLocalNowSec(Math.floor(Date.now() / 1000));
-    }, 250);
-    return () => window.clearInterval(id);
-  }, []);
+    setMounted(true);
+    syncFromCache();
+    void loadPublicOnchainCapsules({ chainNowSec: effectiveNowSec }).then(() => {
+      syncFromCache();
+    });
+    void buildGalleryPool(effectiveNowSec);
+    return subscribePublicOnchainCapsules(syncFromCache);
+  }, [effectiveNowSec, syncFromCache]);
+
+  const selectedItem = useMemo(
+    () =>
+      selectedId
+        ? displayItems.find((item) => item.id === selectedId) ?? directItem
+        : null,
+    [displayItems, directItem, selectedId],
+  );
 
   const openCapsule = useCallback((id: string) => {
     setSelectedId(id);
@@ -90,7 +76,6 @@ export function GalleryClient() {
   const closeCapsule = useCallback(() => {
     setSelectedId(null);
     setDirectItem(null);
-    setDirectLoading(false);
     window.history.replaceState(
       null,
       "",
@@ -104,109 +89,60 @@ export function GalleryClient() {
       if (!id) return;
       setSelectedId(id);
       setDirectItem(null);
-      void queryClient.invalidateQueries({
-        queryKey: CAPSULE_QUERIES.root,
-        refetchType: "all",
-      });
-      void queryClient.refetchQueries({
-        queryKey: CAPSULE_QUERIES.root,
-        type: "active",
-      });
     };
 
     syncFromHash();
     window.addEventListener("hashchange", syncFromHash);
     return () => window.removeEventListener("hashchange", syncFromHash);
-  }, [queryClient]);
+  }, []);
 
   useEffect(() => {
     if (!selectedId) return;
-    if (openedItems.some((item) => item.id === selectedId)) return;
+    if (displayItems.some((item) => item.id === selectedId)) return;
 
     const tokenId = tokenIdFromCapsuleId(selectedId);
     if (tokenId == null) return;
 
     let cancelled = false;
-    setDirectLoading(true);
-    loadPublicOnchainCapsuleById(tokenId)
-      .then((item) => {
-        if (cancelled || !item) return;
-        setDirectItem(item);
-        queryClient.setQueryData<CapsuleItem[]>(
-          CAPSULE_QUERIES.gallery(),
-          (current = []) => dedupeCapsules([item, ...current]),
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setDirectLoading(false);
-      });
+    loadPublicOnchainCapsuleById(tokenId).then((item) => {
+      if (cancelled || !item) return;
+      setDirectItem(item);
+      syncFromCache();
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [openedItems, queryClient, selectedId]);
+  }, [displayItems, selectedId, syncFromCache]);
 
-  const showSkeleton =
-    isPending &&
-    ((pool as CapsuleItem[] | undefined)?.length ?? 0) === 0;
-
-  if (showSkeleton) {
-    return (
-      <div className="ritual-card-grid lg:grid-cols-4">
-        {Array.from({ length: 4 }, (_, i) => (
-          <CapsuleGridSlot key={i} hover={false}>
-            <div className="flex h-full min-h-[26rem] flex-col rounded-2xl border border-white/10 bg-black/75 p-4 sm:min-h-[28rem] md:min-h-[30rem]">
-              <div className="relative aspect-[4/3] min-h-[14rem] w-full shrink-0 animate-pulse rounded-xl bg-white/5 sm:aspect-auto sm:h-56 sm:min-h-0 md:h-60" />
-              <div className="mt-3 min-h-[4.25rem] animate-pulse rounded-lg bg-white/5" />
-              <div className="mt-auto border-t border-white/5 pt-3">
-                <div className="h-3 w-1/2 animate-pulse rounded bg-white/5" />
-              </div>
-            </div>
-          </CapsuleGridSlot>
-        ))}
-      </div>
-    );
-  }
-
-  if (openedItems.length === 0) {
-    return (
-      <>
-        <CapsuleFullViewModal
-          item={directLoading ? directItem : selectedItem}
-          onClose={closeCapsule}
-        />
-      </>
-    );
+  if (!mounted) {
+    return null;
   }
 
   return (
     <>
-      <div className="ritual-card-grid lg:grid-cols-4">
-        {visibleItems.map((item) => (
-          <CapsuleGridSlot key={capsuleDedupeKey(item)} scrollId={`capsule-${item.id}`}>
-            <CapsuleCard
-              item={item}
-              forceOpened
-              onOpen={() => openCapsule(item.id)}
-              className="h-full min-h-0 flex-1 border-transparent bg-black/75"
-            />
-          </CapsuleGridSlot>
-        ))}
-      </div>
-
-      {hasMore ? (
-        <div className="mt-10 flex justify-center">
-          <button
-            type="button"
-            onClick={() =>
-              setVisibleCount((current) => current + GALLERY_PAGE_SIZE)
-            }
-            className="rounded-full border border-white/12 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-cyan-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/[0.08]"
-          >
-            Load more
-          </button>
+      {displayItems.length === 0 ? (
+        <p className="rounded-2xl border border-white/[0.08] bg-black/55 p-6 text-sm leading-relaxed text-zinc-400">
+          No opened capsules yet. Unlocked capsules from Ritual Testnet appear here
+          automatically.
+        </p>
+      ) : (
+        <div className="ritual-card-grid lg:grid-cols-4">
+          {displayItems.map((item, index) => (
+            <CapsuleGridSlot
+              key={capsuleReactKey(item, index)}
+              scrollId={`capsule-${item.id}`}
+            >
+              <CapsuleCard
+                item={item}
+                forceOpened
+                onOpen={() => openCapsule(item.id)}
+                className="h-full min-h-0 flex-1 border-transparent bg-black/75"
+              />
+            </CapsuleGridSlot>
+          ))}
         </div>
-      ) : null}
+      )}
 
       <CapsuleFullViewModal item={selectedItem} onClose={closeCapsule} />
     </>

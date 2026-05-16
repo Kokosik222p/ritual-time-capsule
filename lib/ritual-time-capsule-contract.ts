@@ -78,6 +78,20 @@ export const RITUAL_CAPSULE_ABI = [
     inputs: [{ name: "tokenId", type: "uint256" }],
     outputs: [{ name: "", type: "string" }],
   },
+  {
+    type: "function",
+    name: "ownerOf",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "isOpened",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
 ] as const;
 
 /** @deprecated Використовуйте RITUAL_CAPSULE_ABI — те саме значення. */
@@ -123,6 +137,17 @@ export function getRitualCapsuleAddress(): Address | null {
 /** Fallback for gas-minimal mints without public metadata. */
 export const ONCHAIN_CAPSULE_TOKEN_URI = "";
 
+function encodeJsonAsDataUri(payload: string): string {
+  if (typeof globalThis.btoa === "function") {
+    const bytes = encodeURIComponent(payload).replace(
+      /%([0-9A-F]{2})/gi,
+      (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+    return `data:application/json;base64,${globalThis.btoa(bytes)}`;
+  }
+  return `data:application/json,${payload}`;
+}
+
 export function buildMintMetadataUri(
   message: string,
   tag: CapsuleTag,
@@ -134,7 +159,7 @@ export function buildMintMetadataUri(
       ? { m: fullMessage, c: tag, i: image }
       : { m: fullMessage, c: tag },
   );
-  return `data:application/json,${payload}`;
+  return encodeJsonAsDataUri(payload);
 }
 
 export function buildCapsuleTokenUri(

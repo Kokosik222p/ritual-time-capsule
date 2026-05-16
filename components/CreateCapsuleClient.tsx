@@ -3,7 +3,6 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   useAccount,
   useConnect,
@@ -32,10 +31,10 @@ import {
   readConnectedAddress,
 } from "@/lib/wallet-connection";
 import { useChainTime } from "@/components/web3-provider";
-import { CAPSULE_QUERIES } from "@/lib/capsule-query-keys";
-import { dedupeCapsules } from "@/lib/capsule-lists";
-import { appendMintedCapsule } from "@/lib/minted-capsules-storage";
-import { clearPublicOnchainCapsulesCache } from "@/lib/public-onchain-capsules";
+import {
+  clearPublicOnchainCapsulesCache,
+  upsertPublicOnchainCapsule,
+} from "@/lib/public-onchain-capsules";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import type { Address } from "viem";
 
@@ -227,7 +226,6 @@ export function CreateCapsuleClient() {
       ? "Transaction reverted on-chain."
       : (mintError ?? writeError?.message ?? null);
 
-  const queryClient = useQueryClient();
   const savedMintTxRef = useRef<string | null>(null);
   const capsuleTag: CapsuleTag = tag === "Time" ? "Personal" : tag;
   const chainNowSec = normalizeBlockTimestampToSeconds(nowSec);
@@ -270,80 +268,15 @@ export function CreateCapsuleClient() {
           userPhoto: onchainPhoto,
         };
 
-        queryClient.setQueryData<CapsuleItem[]>(
-          CAPSULE_QUERIES.user(address),
-          (current = []) => dedupeCapsules([optimisticCapsule, ...current]),
-        );
+        upsertPublicOnchainCapsule(optimisticCapsule);
 
-        appendMintedCapsule({
-          id: optimisticCapsule.id,
-          owner,
-          unlockAtUnix: unlockAt,
-          message: optimisticCapsule.message,
-          tag: optimisticCapsule.tag,
-          userPhoto: "",
-        });
-
-        const refreshCapsuleQueries = async () => {
+        const refreshOnchain = () => {
           clearPublicOnchainCapsulesCache();
-          console.debug("[CreateCapsule] refreshing capsule queries", {
-            txHash,
-            unlockAt,
-            chainNowSec,
-            isOpenedNow: unlockAt <= chainNowSec,
-          });
-
-          await Promise.all([
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.gallery(),
-              refetchType: "all",
-            }),
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-              refetchType: "all",
-            }),
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.user(address),
-              refetchType: "all",
-            }),
-            queryClient.invalidateQueries({
-              queryKey: CAPSULE_QUERIES.root,
-              refetchType: "all",
-            }),
-          ]);
-
-          await Promise.all([
-            queryClient.refetchQueries({
-              queryKey: CAPSULE_QUERIES.user(address),
-              type: "all",
-            }),
-            queryClient.refetchQueries({
-              queryKey: CAPSULE_QUERIES.gallery(),
-              type: "all",
-            }),
-            queryClient.refetchQueries({
-              queryKey: CAPSULE_QUERIES.homeRecentlyOpenedRoot,
-              type: "all",
-            }),
-          ]);
-
-          queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.user(address),
-            (current = []) => dedupeCapsules(current),
-          );
-          queryClient.setQueryData<CapsuleItem[]>(
-            CAPSULE_QUERIES.gallery(),
-            (current = []) => dedupeCapsules(current),
-          );
         };
 
-        await refreshCapsuleQueries();
-        window.setTimeout(() => {
-          void refreshCapsuleQueries();
-        }, 3000);
-        window.setTimeout(() => {
-          void refreshCapsuleQueries();
-        }, 15000);
+        refreshOnchain();
+        window.setTimeout(refreshOnchain, 3000);
+        window.setTimeout(refreshOnchain, 15000);
       } catch (e) {
         console.error(e);
       } finally {
@@ -360,7 +293,6 @@ export function CreateCapsuleClient() {
     message,
     mintSucceeded,
     photoUrl,
-    queryClient,
     receipt?.status,
     capsuleTag,
     txHash,
