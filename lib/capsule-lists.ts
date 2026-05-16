@@ -1,5 +1,9 @@
 import { capsuleCanonKey } from "@/lib/capsule-keys";
 import {
+  isReliableUnlockTimestamp,
+  parseOnchainTokenId,
+} from "@/lib/capsule-unlock";
+import {
   getCachedPublicOnchainCapsules,
   loadPublicOnchainCapsules,
   scheduleHydrateCapsules,
@@ -16,12 +20,16 @@ function normalizeOptionalUnixTime(value: number | undefined): number | undefine
   return normalizeBlockTimestampToSeconds(value);
 }
 
+function unlockSortKey(item: CapsuleItem): number {
+  const unlock = normalizeOptionalUnixTime(item.unlockAtUnix);
+  if (isReliableUnlockTimestamp(unlock)) return unlock;
+  const token = parseOnchainTokenId(item.id);
+  if (token != null) return Number(token);
+  return 0;
+}
+
 function sortByUnlockNewestFirst(items: CapsuleItem[]): CapsuleItem[] {
-  return [...items].sort(
-    (a, b) =>
-      (normalizeOptionalUnixTime(b.unlockAtUnix) ?? 0) -
-      (normalizeOptionalUnixTime(a.unlockAtUnix) ?? 0),
-  );
+  return [...items].sort((a, b) => unlockSortKey(b) - unlockSortKey(a));
 }
 
 function richnessScore(item: CapsuleItem): number {
@@ -85,16 +93,50 @@ export function dedupeByCanon(items: CapsuleItem[]): CapsuleItem[] {
   return Array.from(byCanon.values());
 }
 
-/** Gallery: one card per on-chain token id (never merge different tokenIds). */
+function preferRicherCapsule(a: CapsuleItem, b: CapsuleItem): CapsuleItem {
+  if (richnessScore(b) > richnessScore(a)) return b;
+  if (richnessScore(a) > richnessScore(b)) return a;
+  if (a.id.startsWith("onchain-") && !b.id.startsWith("onchain-")) return a;
+  if (b.id.startsWith("onchain-") && !a.id.startsWith("onchain-")) return b;
+  return a;
+}
+
+/**
+ * Gallery: one card per NFT (onchain token id). Drops tx-hash rows that duplicate
+ * an existing onchain-N entry with the same owner/unlock/tag.
+ */
 export function dedupeForPublicGallery(items: CapsuleItem[]): CapsuleItem[] {
-  const byId = new Map<string, CapsuleItem>();
+  const byOnchainToken = new Map<string, CapsuleItem>();
+  const offchain: CapsuleItem[] = [];
+
   for (const item of items) {
-    const existing = byId.get(item.id);
-    if (!existing || richnessScore(item) > richnessScore(existing)) {
-      byId.set(item.id, item);
+    const tokenId = parseOnchainTokenId(item.id);
+    if (tokenId != null) {
+      const existing = byOnchainToken.get(tokenId);
+      byOnchainToken.set(
+        tokenId,
+        existing ? preferRicherCapsule(existing, item) : item,
+      );
+      continue;
     }
+    offchain.push(item);
   }
-  return Array.from(byId.values());
+
+  const onchainCanons = new Set(
+    [...byOnchainToken.values()].map((item) => capsuleCanonKey(item)),
+  );
+  const byOffchainId = new Map<string, CapsuleItem>();
+
+  for (const item of offchain) {
+    if (onchainCanons.has(capsuleCanonKey(item))) continue;
+    const existing = byOffchainId.get(item.id);
+    byOffchainId.set(
+      item.id,
+      existing ? preferRicherCapsule(existing, item) : item,
+    );
+  }
+
+  return [...byOnchainToken.values(), ...byOffchainId.values()];
 }
 
 export function isOpenedAtChainTime(
@@ -108,7 +150,8 @@ export function isOpenedAtChainTime(
       ? normalizeBlockTimestampToSeconds(chainNowSec)
       : Math.floor(Date.now() / 1000);
   const unlockAt = normalizeOptionalUnixTime(item.unlockAtUnix);
-  return unlockAt != null && unlockAt <= now;
+  if (!isReliableUnlockTimestamp(unlockAt)) return false;
+  return unlockAt <= now;
 }
 
 export function needsMetadataHydration(item: CapsuleItem): boolean {
@@ -180,18 +223,24 @@ export function buildGalleryPoolFromCache(
   return enrichOpenedForDisplay(getCachedPublicOnchainCapsules(), chainNowSec);
 }
 
+/** Sync gallery list: opened + deduped (safe to call every cache update). */
+export function buildGalleryDisplayItems(
+  chainNowSec = Math.floor(Date.now() / 1000),
+): CapsuleItem[] {
+  return buildGalleryPoolFromCache(chainNowSec);
+}
+
 export async function buildGalleryPool(
   chainNowSec = Math.floor(Date.now() / 1000),
 ): Promise<CapsuleItem[]> {
-  const instant = buildGalleryPoolFromCache(chainNowSec);
   kickBackgroundOnchainRefresh(chainNowSec);
 
+  const instant = buildGalleryDisplayItems(chainNowSec);
   if (instant.length > 0) {
     scheduleHydrateCapsules(
       instant.filter(needsMetadataHydration),
       chainNowSec,
     );
-    return instant;
   }
 
   const raw = await loadPublicOnchainCapsules({ chainNowSec });
@@ -200,7 +249,7 @@ export async function buildGalleryPool(
     opened.filter(needsMetadataHydration),
     chainNowSec,
   );
-  return opened;
+  return opened.length > 0 ? opened : instant;
 }
 
 export function buildHomeRecentlyOpenedFromCache(

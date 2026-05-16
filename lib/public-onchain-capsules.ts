@@ -6,6 +6,10 @@ import {
   applyMetadataCache,
   persistMetadataCache,
 } from "@/lib/capsule-metadata-cache";
+import {
+  isReliableUnlockTimestamp,
+  sanitizeCapsuleUnlockFields,
+} from "@/lib/capsule-unlock";
 import { sanitizeCapsulePhotoUrl } from "@/lib/capsule-media";
 import {
   getRitualCapsuleAddress,
@@ -478,7 +482,7 @@ async function readOnchainCapsuleState(
 }
 
 function unlockFallbackForProbedToken(opened: boolean): number | undefined {
-  if (opened) return 1;
+  if (opened) return undefined;
   return Math.floor(Date.now() / 1000) + 365 * 86400;
 }
 
@@ -491,7 +495,11 @@ async function shellsFromDiscoveredTokens(
     tokenIds,
     async (tokenId) => {
       const fromLog = mintByTokenId.get(tokenId.toString());
-      if (fromLog?.owner && fromLog.unlockAtUnix != null) {
+      if (
+        fromLog?.owner &&
+        (isReliableUnlockTimestamp(fromLog.unlockAtUnix) ||
+          fromLog.openedOnChain != null)
+      ) {
         return fromLog;
       }
 
@@ -500,7 +508,7 @@ async function shellsFromDiscoveredTokens(
 
       const fromLogComplete =
         fromLog?.owner &&
-        fromLog.unlockAtUnix != null &&
+        isReliableUnlockTimestamp(fromLog.unlockAtUnix) &&
         fromLog.openedOnChain == null;
 
       return {
@@ -587,10 +595,12 @@ function writePersistedCapsules(address: Address, items: CapsuleItem[]): void {
 
 function commitCapsuleCache(address: Address, items: CapsuleItem[]): void {
   const enriched = withMetadataCache(
-    items.map((item) => ({
-      ...item,
-      userPhoto: sanitizeCapsulePhotoUrl(item.userPhoto),
-    })),
+    items.map((item) =>
+      sanitizeCapsuleUnlockFields({
+        ...item,
+        userPhoto: sanitizeCapsulePhotoUrl(item.userPhoto),
+      }),
+    ),
   );
   persistMetadataCache(enriched);
   cachedCapsules = { address, loadedAtMs: Date.now(), items: enriched };

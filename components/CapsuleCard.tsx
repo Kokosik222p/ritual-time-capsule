@@ -6,6 +6,7 @@ import { CATEGORY_VISUAL } from "@/lib/capsule-categories";
 import type { CapsuleItem } from "@/lib/capsule-types";
 import { normalizeBlockTimestampToSeconds } from "@/lib/chain-time";
 import { resolveCapsuleMedia } from "@/lib/capsule-display";
+import { isReliableUnlockTimestamp } from "@/lib/capsule-unlock";
 import { formatOpenedAgo, formatSealedUntil } from "@/lib/time-format";
 import { useChainTime } from "@/components/web3-provider";
 
@@ -112,19 +113,30 @@ export function CapsuleCard({
   const hasMessage = messageText.length > 0;
 
   const isOpenedVisual =
-    forceOpened || (unlockAt != null && unlockAt <= nowSecEffective);
+    forceOpened ||
+    item.openedOnChain === true ||
+    (unlockAt != null && unlockAt <= nowSecEffective);
   const isSealed = !isOpenedVisual;
   const isOpened = isOpenedVisual;
 
   const timeLabel = (() => {
     if (isOpened) {
-      if (unlockAt == null || !Number.isFinite(unlockAt)) {
+      const reliableUnlock = isReliableUnlockTimestamp(unlockAt)
+        ? unlockAt
+        : undefined;
+      if (item.openedOnChain === true && reliableUnlock == null) {
         return "Opened recently";
       }
-      const openedAt = Math.min(Math.floor(unlockAt), nowSecEffective);
+      if (reliableUnlock == null) {
+        return "Opened recently";
+      }
+      const openedAt = Math.min(reliableUnlock, nowSecEffective);
       return formatOpenedAgo(openedAt, nowSecEffective);
     }
-    return formatSealedUntil(unlockAt ?? nowSecEffective);
+    if (isReliableUnlockTimestamp(unlockAt)) {
+      return formatSealedUntil(unlockAt);
+    }
+    return "Sealed";
   })();
 
   const cardBase = spotlight

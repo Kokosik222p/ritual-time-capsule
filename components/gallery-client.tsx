@@ -6,8 +6,8 @@ import { CapsuleFullViewModal } from "@/components/CapsuleFullViewModal";
 import { CapsuleGridSlot } from "@/components/capsule-grid-slot";
 import { useChainTime } from "@/components/web3-provider";
 import {
+  buildGalleryDisplayItems,
   buildGalleryPool,
-  buildGalleryPoolFromCache,
   capsuleReactKey,
 } from "@/lib/capsule-lists";
 import {
@@ -45,7 +45,7 @@ export function GalleryClient() {
   const [directItem, setDirectItem] = useState<CapsuleItem | null>(null);
 
   const syncFromCache = useCallback(() => {
-    setDisplayItems(buildGalleryPoolFromCache(effectiveNowSec));
+    setDisplayItems(buildGalleryDisplayItems(effectiveNowSec));
   }, [effectiveNowSec]);
 
   useEffect(() => {
